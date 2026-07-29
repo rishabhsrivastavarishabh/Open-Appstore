@@ -1,3 +1,7 @@
+"scripts": {
+  "build": "vite build",
+  "deploy": "wrangler pages deploy dist"
+}
 {
   "name": "webapp",
   "type": "module",
