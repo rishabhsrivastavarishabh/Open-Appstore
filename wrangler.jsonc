@@ -5,30 +5,11 @@
   "pages_build_output_dir": "./dist",
   "compatibility_flags": [
     "nodejs_compat"
-  ]
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "MY_KV_NAMESPACE",
-  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  //   }
-  // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
-  //   }
-  // ],
-  // "ai": {
-  //   "binding": "AI"
-  // }
+  ],
+  // Public Supabase project (anon key is safe to expose — protected by RLS).
+  // For production these are also settable via the Cloudflare Pages dashboard.
+  "vars": {
+    "SUPABASE_URL": "https://edcdqykohvcnwqgiwhke.supabase.co",
+    "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkY2RxeWtvaHZjbndxZ2l3aGtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MTg3MTksImV4cCI6MjEwMDM5NDcxOX0.4UqoIwPqSBra34uF_yNcsVNNhL3qujddtBIsmJyqjFQ"
+  }
 }

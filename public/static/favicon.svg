@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="Open App Store">
+  <title>Open App Store</title>
+  <defs>
+    <!-- Bright sky-cyan (top-left) → deep violet-indigo (bottom-right) -->
+    <linearGradient id="oasBag" x1="20" y1="26" x2="80" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00c2ff"/>
+      <stop offset=".42" stop-color="#1668e3"/>
+      <stop offset="1" stop-color="#2a12a0"/>
+    </linearGradient>
+    <linearGradient id="oasTile" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef2f7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Light squircle tile -->
+  <rect x="0" y="0" width="100" height="100" rx="22" ry="22" fill="url(#oasTile)"/>
+  <rect x=".75" y=".75" width="98.5" height="98.5" rx="21.4" ry="21.4" fill="none" stroke="#dbe3ec" stroke-width="1.5"/>
+
+  <g fill="url(#oasBag)">
+    <!-- Handle: thick semicircular arch, inner opening flush with the arrow shaft -->
+    <path d="M38 38 A12 12 0 0 1 62 38 L57 38 A7 7 0 0 0 43 38 Z"/>
+    <!-- Bag body, LEFT half — rounded top+base corners, split by the knocked-out arrow -->
+    <path d="M43 38 L26.5 38 Q23.6 38 23.3 40.9 L18.6 82 Q18 87 23 87 L50 87 L32 66 L43 66 Z"/>
+    <!-- Bag body, RIGHT half -->
+    <path d="M57 38 L73.5 38 Q76.4 38 76.7 40.9 L81.4 82 Q82 87 77 87 L50 87 L68 66 L57 66 Z"/>
+  </g>
+</svg>
