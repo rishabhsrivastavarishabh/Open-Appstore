@@ -22,7 +22,7 @@ An open app marketplace with a built-in developer console — server-rendered on
 ## URLs
 
 - **Local dev**: http://localhost:3000
-- **Sandbox preview**: https://3000-ie74f2trvh5cfaiw2ngva-5185f4aa.sandbox.novita.ai
+- **Sandbox preview**:https://openappstore.openflip.in
 - **Production**: not yet deployed to Cloudflare Pages
 - **Health check**: `/api/health`
 
