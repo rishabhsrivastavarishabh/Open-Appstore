@@ -1,197 +1,228 @@
-# Open App Store
+# Open Appstore
 
-An open app marketplace with a built-in developer console — server-rendered on the edge with Hono + Cloudflare Pages, backed by a live Supabase (PostgREST + GoTrue) database.
+An open, developer-first app store: a server-rendered storefront plus a developer console, built as a
+single lightweight edge application. Every page is real HTML on first paint — JavaScript only enhances it.
 
-## Project Overview
+- **Name**: Open Appstore
+- **Android application id (companion client)**: `com.app.store`
+- **Stack**: Hono 4 + Cloudflare Pages · Supabase (PostgREST + GoTrue) · plain HTML/CSS/JS/JSON
+- **No TypeScript, no build-time frameworks**: `src/**/*.js` only, bundled by Vite for the Worker
 
-- **Name**: Open App Store
-- **Goal**: A complete two-sided app marketplace where visitors discover / review apps and developers publish and manage them, delivered as fast server-rendered HTML on Cloudflare's edge network.
-- **Key features**:
-  - **Store ⇄ Developer mode switch** in the header — one click flips the entire navigation, theme accents and page set between the consumer storefront and the developer console.
-  - **First page is real server-rendered HTML** — the home page arrives fully populated (~36 KB of markup with live app data), not a client-side SPA shell. JavaScript is layered on top as progressive enhancement.
-  - Live search with keyboard navigation (`/` hotkey, arrow keys, Enter/Esc)
-  - Browse with filters (category, price, rating, sort) + grid/list toggle, persisted
-  - Top charts with Chart.js visualisations
-  - App detail pages with screenshots, ratings breakdown, reviews and star-picker review submission
-  - Developer directory and public developer profiles
-  - Full auth: email/password signup + login, magic link, password reset, refresh-token rotation
-  - Developer console: dashboard stats, my-apps management (inline edit dialog, publish/unpublish, delete), app submission with live preview, developer profile, API documentation
-  - Dark/light theme with persistence, mobile tab bar, responsive at 390 / 768 / 1920 px
-  - PWA manifest + full icon set, `robots.txt`
+---
 
-## URLs
+## 1. URLs
 
-- **Local dev**: http://localhost:3000
-- **Sandbox preview**:https://openappstore.openflip.in
-- **Production**: not yet deployed to Cloudflare Pages
-- **Health check**: `/api/health`
-
-## Brand / Logo
-
-The brand mark is a hand-authored SVG recreation of the supplied app-icon artwork: a light squircle tile containing a blue→indigo gradient shopping bag with a white **negative-space download arrow** (the arrow is knocked out of the bag body rather than drawn on top, so it reads correctly at any size). Verified at **9.8/10** fidelity against the reference and legible down to 64 px.
-
-| Asset | Purpose |
+| What | URL |
 | --- | --- |
-| `public/static/favicon.svg` | Browser favicon (vector, source of truth) |
-| `public/static/logo.svg` | Inline `<img class="brand-mark">` in header, footer and auth pages |
-| `public/static/apple-touch-icon.png` | 180 px iOS home-screen icon |
-| `public/static/icon-192.png` | 192 px PWA icon |
-| `public/static/icon-512.png` | 512 px PWA icon (also `maskable`) |
+| Intended production domain | https://openappstore.openflip.in |
+| Local dev | http://localhost:3000 |
+| Sandbox preview | https://3000-ie74f2trvh5cfaiw2ngva-5185f4aa.sandbox.novita.ai |
+| GitHub | https://github.com/rishabhsrivastavarishabh/Open-Appstore |
+| Production deploy | not deployed yet — see [§8 Deployment](#8-deployment) |
+| Health check | `/api/health` |
+| Play listing (companion app) | https://play.google.com/store/apps/details?id=com.app.store |
 
-## Functional Entry URIs
+---
 
-### Store pages (server-rendered)
+## 2. Completed features
 
-| Path | Description |
-| --- | --- |
-| `/` | Home — hero, featured, trending, categories, top developers |
-| `/apps` | Browse / search. Params: `?q=`, `&category=`, `&price=free\|paid`, `&rating=`, `&sort=popular\|rating\|newest\|name`, `&view=grid\|list` |
-| `/categories` | All categories with live app counts |
-| `/top-charts` | Top charts + Chart.js breakdown |
-| `/app/:slug` | App detail (slug or id), screenshots, reviews, review form |
-| `/developers` | Developer directory |
-| `/developer-profile/:id` | Public developer profile + their apps |
-| `/legal/privacy`, `/legal/terms`, `/legal/guidelines` | Legal pages |
-
-### Auth pages
-
-| Path | Description |
-| --- | --- |
-| `/auth/login` | Password login + magic-link option |
-| `/auth/signup` | Create account (email confirmation required) |
-| `/auth/reset` | Password reset request |
+### Storefront (server-rendered)
+- `/` home: hero, featured, trending, categories, new releases — full HTML on first byte
+- `/apps` browse with search, category, sort, price filters and pagination (real totals)
+- `/top-charts`, `/categories`, `/category/:slug`, `/developers`, `/developer/:slug`
+- `/app/:slug` detail: gallery, description, reviews, version history, **update-available banner**,
+  changelog, links & downloads card, Google Drive mirror, privacy policy, **“Open in app” deep link**
+- `/search`, `/legal/privacy`, `/legal/terms`, `/about`
+- **Store ⇄ Developer mode switch** in the header on every page
+- Dark/light theme with persistence, toasts, skeletons, share sheet
+- `sitemap.xml` (with `<image:image>` entries) and `robots.txt`
+- Web manifest with `related_applications` pointing at `com.app.store`
 
 ### Developer console
+- `/developer` dashboard with a 1‑2‑3 stepper that reflects real progress
+- `/developer/apps` — edit listings, publish releases (semver validated, duplicate version → 409)
+- `/developer/submit` — new listing (gated until the developer profile exists)
+- `/developer/profile` — studio profile with live preview
+- `/developer/security` — **two-factor authentication**, backup codes, devices, sign-in history
+- `/developer/docs` — the full REST API reference
 
-| Path | Description |
+### Authentication
+- Email + password sign-up / sign-in / password reset
+- **Sign in with Google** (`/api/auth/google` → Supabase GoTrue → `/auth/callback`)
+- **Two-factor authentication (TOTP, RFC 6238)** with QR enrolment and 10 single-use backup codes
+- Sign-in history and device records for every attempt
+- ❌ **Removed**: email one-time-code (OTP) sign-in and “email me a sign-in link” (magic link)
+
+### Media handling
+- Google Drive share links are rewritten automatically:
+  - images → `drive.google.com/thumbnail?id=…&sz=w1600`
+  - downloads → `drive.google.com/uc?export=download&id=…`
+- Dropbox, GitHub and OneDrive links are normalised too; host labels shown on every link tile
+
+---
+
+## 3. API surface
+
+All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where marked 🔒.
+
+### Apps
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/apps` | `?search= &category= &sort=popular\|newest\|rating\|name &price=free\|paid &limit= &offset=` → `{ apps, total, count, has_more }` |
+| GET | `/api/apps/:idOrSlug` | app + developer + reviews + versions |
+| GET | `/api/apps/:id/versions` | release history |
+| POST | `/api/apps/:id/download` | records the download, returns the resolved URL |
+| GET | `/api/apps/:id/reviews`, POST 🔒 | list / create a review |
+| GET | `/api/categories`, `/api/developers`, `/api/stats`, `/api/health` | |
+
+### Auth
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/api/auth/signup` | `{ email, password, developer_name? }` |
+| POST | `/api/auth/login` | → `{ session }`, or `{ requires_2fa: true, challenge }` |
+| GET | `/api/auth/google` | `?next=` → 302 to Google via Supabase |
+| POST | `/api/auth/oauth/exchange` | `{ code }` → `{ session }` (PKCE) |
+| POST | `/api/auth/reset-password` | `{ email }` |
+| POST | `/api/auth/refresh` | `{ refresh_token }` |
+| POST | `/api/auth/logout` 🔒 | |
+| GET | `/api/me` 🔒 | user + developer + profile |
+
+### Two-factor
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/auth/2fa` 🔒 | `{ enabled, pending, backup_codes_left }` |
+| POST | `/api/auth/2fa/setup` 🔒 | → `{ secret, otpauth_uri }` (not enforced yet) |
+| POST | `/api/auth/2fa/enable` 🔒 | `{ code }` → `{ backup_codes }` (shown once) |
+| POST | `/api/auth/2fa/disable` 🔒 | `{ code }` — TOTP or backup code |
+| POST | `/api/auth/2fa/verify` | `{ challenge, code }` → `{ session }` |
+| GET | `/api/auth/sessions` 🔒 | devices + last 15 sign-in attempts |
+
+### Developer 🔒
+`GET/POST /api/developer/apps`, `PATCH/DELETE /api/developer/apps/:id`,
+`GET/POST /api/developer/apps/:id/versions`, `GET/PUT /api/developer/profile`,
+`POST /api/developer/register`, `GET /api/developer/stats`.
+
+---
+
+## 4. Data architecture
+
+**Storage**: Supabase Postgres, reached over PostgREST and GoTrue with `fetch` only (no SDK, edge-safe).
+
+| Table | Used for |
 | --- | --- |
-| `/developer` | Dashboard — totals, downloads, ratings, recent apps |
-| `/developer/apps` | My apps — edit dialog, publish/unpublish, delete |
-| `/developer/submit` | Submit a new app, with live card preview |
-| `/developer/profile` | Developer profile settings |
-| `/developer/docs` | API documentation |
+| `stores` | store identity (`STORE_ID`) |
+| `developers` | studio profiles, rollup counters |
+| `apps` | listings: name, slug, category, version, `version_code`, `min_version`, prices, `download_url`, `drive_url`, `website_link`, `privacy_policy_link`, `auto_update`, `update_available`, `change_log`, screenshots |
+| `app_versions` | release history (`file_size` is an **integer, in MB**) |
+| `app_reviews` | ratings + comments (`user_id` is NOT NULL) |
+| `app_downloads` | one row per download |
+| `user_installed_apps` | a user’s library |
+| `user_profiles` | display names/avatars |
+| `user_2fa` | `totp_secret`, `enabled`, `backup_codes` (SHA-256 hashes) |
+| `user_devices` | device hash, name, IP, last seen |
+| `user_login_history` | success/failure + reason for every attempt |
+| `notifications`, `developer_stats` | reserved for future use |
 
-### Public API
+**Security notes**
+- The TOTP secret and backup-code hashes are only ever read server-side with the service-role key.
+- A half-finished 2FA login is carried in an **AES-GCM sealed challenge token** (5-minute expiry), so no
+  server-side session store is needed.
+- Backup codes are stored as SHA-256 hashes and removed when used.
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET | `/api/health` | Service heartbeat |
-| GET | `/api/apps` | List apps. Params: `q`, `category`, `price`, `rating`, `sort`, `limit`, `offset`, `featured` |
-| GET | `/api/apps/stats` | Aggregate marketplace stats |
-| GET | `/api/apps/:key` | Single app by slug or id |
-| GET | `/api/categories` | Categories with counts |
-| GET | `/api/developers` | Developers with app counts |
-| GET | `/api/developers/:id` | Single developer + apps |
-| GET | `/api/apps/:id/reviews` | Reviews for an app |
-| POST | `/api/apps/:id/reviews` | Submit a review *(auth required)* |
-| POST | `/api/apps/:id/download` | Register a download / return download URL |
+---
 
-### Auth API
+## 5. User guide
 
-| Method | Path | Description |
-| --- | --- | --- |
-| POST | `/api/auth/signup` | Register (returns `needs_confirmation`) |
-| POST | `/api/auth/login` | Password grant → access + refresh token |
-| POST | `/api/auth/magic-link` | Send OTP / magic link |
-| POST | `/api/auth/reset-password` | Send recovery email |
-| POST | `/api/auth/refresh` | Rotate refresh token |
-| POST | `/api/auth/logout` | Revoke session |
-| GET | `/api/me` | Current user *(401 when anonymous)* |
-| POST | `/api/developer/register` | Upgrade account to developer |
+**Shoppers** — browse `/`, filter on `/apps`, open a listing, press **Get it now** (the download is
+recorded and the correct direct URL is resolved). On Android, **Open in app** hands off to the
+`com.app.store` client; everywhere else the same button points at the Play listing.
 
-### Developer API *(all require `Authorization: Bearer <token>`)*
+**Developers**
+1. `/auth/signup` (or **Continue with Google**) → confirm your email if asked.
+2. `/developer/profile` — create the studio profile. Submission stays locked until this exists.
+3. `/developer/submit` — publish the first listing.
+4. `/developer/apps` — **Release update** adds a version; tick *Update available* to show the banner on
+   the store page, and write a changelog.
+5. `/developer/security` — scan the QR code with Google Authenticator / Authy / 1Password / Bitwarden,
+   confirm one code, then save the ten backup codes. From then on every sign-in asks for a code.
 
-| Method | Path | Description |
-| --- | --- | --- |
-| GET | `/api/developer/apps` | List my apps + stats |
-| POST | `/api/developer/apps` | Create an app |
-| PATCH | `/api/developer/apps/:id` | Update an app |
-| DELETE | `/api/developer/apps/:id` | Delete an app |
+---
 
-### Assets
+## 6. Project layout
 
-`/manifest.webmanifest`, `/robots.txt`, `/static/app.css`, `/static/app.js`, `/static/logo.svg`, `/static/favicon.svg`, `/static/icon-{192,512}.png`, `/static/apple-touch-icon.png`
+```
+webapp/
+├── src/
+│   ├── index.js            # routes + SSR pages (Hono)
+│   ├── lib/
+│   │   ├── supabase.js     # PostgREST/GoTrue fetch client (count=exact support)
+│   │   ├── types.js        # select lists + row → view mappers
+│   │   ├── media.js        # Drive/Dropbox/GitHub link normalisation
+│   │   └── totp.js         # RFC 6238 TOTP, base32, backup codes, sealed challenges
+│   ├── routes/             # api-apps.js · api-auth.js · api-developer.js
+│   └── views/              # layout.js · store.js · developer.js · components.js
+├── public/static/          # app.js · app.css · logo.svg · icons
+├── scripts/seed.mjs        # idempotent demo-data seeder
+├── vite.config.js · wrangler.jsonc · ecosystem.config.cjs
+```
 
-## Data Architecture
+---
 
-- **Storage service**: **Supabase** (hosted Postgres) accessed exclusively over **PostgREST** (`/rest/v1/…`) and **GoTrue** (`/auth/v1/…`) with plain `fetch` — no `@supabase/supabase-js` SDK, so the bundle stays edge-friendly.
-- **Live tables used**: `apps`, `developers`, `app_reviews`, `app_versions`.
-- **Data models**:
-  - `apps` — `id`, `slug`, `name`, `tagline`, `description`, `category`, `price`, `icon_url`, `screenshots`, `downloads`, `rating`, `total_ratings`, `status`, `developer_id`, `created_at`
-  - `developers` — `id`, `name`, `slug`, `bio`, `website`, `avatar_url`, `verified`
-  - `app_reviews` — `id`, `app_id`, `user_id`, `rating`, `title`, `body`, `created_at`
-  - Categories are **derived** by aggregating `apps.category` (there is no `categories` table).
-  - `AppView` in `src/lib/types.ts` is the normalised shape every view consumes.
-- **Data flow**: Hono route → `sbSelect`/`sbWrite`/`sbAuth` (`src/lib/supabase.ts`) → Supabase REST → `toAppView()` → `hono/html` template → HTML response. The browser runtime (`public/static/app.js`) then calls the same `/api/*` endpoints for interactive updates, holding the session in `localStorage` under `oas.session.v1` with automatic 401 → refresh → replay.
-
-### Important environment notes
-
-- The **service-role key supplied is actually an anon key** (its JWT payload is `"role":"anon"`). Because of this, **RLS blocks anonymous INSERTs** into `apps`, `app_reviews` and `app_versions` (Postgres code `42501`). Writes therefore require a signed-in user bearer token *and* matching RLS policies — the API surfaces an actionable `hint` string when a write is rejected instead of failing silently.
-- Supabase has **email confirmation enabled** (`mailer_autoconfirm: false`), so a fresh signup returns `needs_confirmation` and login until confirmed returns `email_not_confirmed` (the UI explains this in plain language). Only the `email` provider is enabled — **no OAuth**.
-- File uploads (Vercel Blob in the original spec) are **intentionally omitted** — unavailable on Cloudflare Pages. Icon and screenshot fields accept URLs instead.
-
-## User Guide
-
-**As a visitor**
-1. Open `/` — the storefront is already rendered in the HTML.
-2. Search with the header box or press `/`; use ↑ ↓ and Enter to pick a result.
-3. Go to `/apps` to filter by category, price, rating and sort order; toggle grid/list.
-4. Open any app to see screenshots, the rating breakdown and reviews. **Get** starts the download; **Share** copies the link.
-5. Toggle dark/light with the theme button — the choice is remembered.
-
-**As a developer**
-1. Click **Developer** in the header mode switch (or open `/developer`).
-2. Create an account at `/auth/signup`, then **confirm the email Supabase sends** before logging in.
-3. Log in at `/auth/login` (or request a magic link).
-4. Use `/developer/submit` to publish an app — the live preview shows exactly how the store card will look.
-5. Manage everything from `/developer/apps` (edit, publish/unpublish, delete) and watch performance on `/developer`.
-6. `/developer/docs` documents every endpoint for programmatic use.
-
-## Development
+## 7. Local development
 
 ```bash
 npm install
-npm run build                      # vite build → dist/
-pm2 start ecosystem.config.cjs     # wrangler pages dev dist on :3000
+npm run build                 # required before the first start
+pm2 start ecosystem.config.cjs
 curl http://localhost:3000/api/health
 pm2 logs webapp --nostream
 ```
 
-Local secrets live in `.dev.vars` (gitignored); the same values are mirrored in the `vars` block of `wrangler.jsonc` for deploys.
+`.dev.vars` (never committed) holds:
 
-## Tech Stack
+```
+SUPABASE_URL=…
+SUPABASE_ANON_KEY=…
+SUPABASE_SERVICE_ROLE_KEY=…   # required for 2FA and audit writes
+STORE_ID=…
+```
 
-- **Backend**: Hono 4 on Cloudflare Pages (edge runtime)
-- **Rendering**: `hono/html` server-side templates (no SPA framework)
-- **Frontend**: one vanilla ES module (`app.js`, ~1.3 k lines) + hand-written CSS design system (`app.css`, ~61 KB), Tailwind-free
-- **CDN libraries**: Font Awesome 6, Chart.js
-- **Database / Auth**: Supabase PostgREST + GoTrue over `fetch`
-- **Build**: Vite 8 + `@hono/vite-build/cloudflare-pages`
-- **Tooling**: Wrangler 4, PM2, TypeScript (strict)
+Seed demo data (safe to re-run): `node scripts/seed.mjs`.
 
-## Not Yet Implemented
+---
 
-- Deployment to Cloudflare Pages production
-- Binary/file uploads for app icons, screenshots and APK/IPA artifacts (needs R2)
-- Server-side write access for anonymous flows — blocked until a genuine service-role key or explicit RLS policies are provided
-- OAuth / social sign-in (disabled in the Supabase project)
-- Favourites / wishlist, install history, and in-app purchase flows (tables absent)
-- Sitemap generation (`robots.txt` already points at `/sitemap.xml`)
-- Automated test suite (verification is currently curl-based)
+## 8. Deployment
 
-## Recommended Next Steps
+**Status**: ❌ not deployed yet. Two paths are possible — Genspark-hosted Cloudflare, or your own
+Cloudflare account with an API token in the Deploy panel. Pick one and the deploy can proceed.
 
-1. Deploy to Cloudflare Pages and set `SUPABASE_URL` / `SUPABASE_ANON_KEY` as project secrets.
-2. Add RLS policies so authenticated users can insert their own `apps` and `app_reviews` rows, or supply a real service-role key.
-3. Add an R2 bucket and wire icon/screenshot uploads to replace URL-only inputs.
-4. Generate `/sitemap.xml` from published apps and categories.
-5. Either disable Supabase email confirmation for smoother demos or add a "resend confirmation" action.
-6. Add caching (Cloudflare Cache API or KV) for `/api/apps/stats` and category counts.
+Before Google sign-in works in production:
 
-## Deployment
+1. **Rotate the Google client secret** — the one in the uploaded JSON has been exposed in chat.
+2. Supabase Dashboard → **Authentication → Providers → Google**: paste the client id + (new) secret.
+3. Google Cloud Console → **Authorized redirect URIs**: add
+   `https://edcdqykohvcnwqgiwhke.supabase.co/auth/v1/callback`.
+4. Google Cloud Console → **Authorized JavaScript origins**: add your deployed site origin.
+5. Register `SUPABASE_SERVICE_ROLE_KEY` as a deployment secret (never in `wrangler.jsonc`).
 
-- **Platform**: Cloudflare Pages
-- **Status**: ✅ Running locally / preview · ❌ Not yet deployed to production
-- **Build output**: `dist/_worker.js` (117 KB, 33 KB gzip) + `dist/static/*`
-- **Tech Stack**: Hono + TypeScript + Vite + Supabase
-- **Last Updated**: 2026-07-29
+---
+
+## 9. Not implemented yet
+
+- User-facing library page for `user_installed_apps` (data is seeded, UI pending)
+- In-app notifications UI (`notifications` table unused)
+- Paid-app checkout (prices are display-only)
+- Full 3D skeuomorphic restyle of the storefront
+- Brand logo is an **interim** vector reconstruction of the supplied reference; a pixel-faithful
+  version is still open
+
+## 10. Suggested next steps
+
+1. Choose the deployment path and ship it, then finish the Google provider configuration above.
+2. Build the user library + notifications screens on the existing tables.
+3. Replace the interim logo with the final artwork and regenerate the icon set.
+4. Add rate limiting on `/api/auth/*` and a "trusted device" skip for 2FA.
+
+---
+
+**Last updated**: 2026-07-31

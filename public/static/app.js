@@ -39,6 +39,41 @@ function initials(name) {
     .join('')
 }
 
+/**
+ * Client-side twin of src/lib/media.js. The server rewrites share links when it
+ * stores/reads them; this copy exists purely so the *live preview* on the submit
+ * form shows the real image the moment a Drive link is pasted.
+ */
+function driveId(url) {
+  if (!url) return null
+  const s = String(url).trim()
+  if (!/(?:drive|docs)\.google\.com|drive\.usercontent\.google\.com/i.test(s)) return null
+  let m = /\/(?:file|document|presentation|spreadsheets)\/d\/([A-Za-z0-9_-]{10,})/.exec(s)
+  if (m) return m[1]
+  m = /[?&]id=([A-Za-z0-9_-]{10,})/.exec(s)
+  if (m) return m[1]
+  m = /\/d\/([A-Za-z0-9_-]{10,})/.exec(s)
+  return m ? m[1] : null
+}
+
+function directImage(url, width = 1600) {
+  if (!url) return ''
+  const s = String(url).trim()
+  const id = driveId(s)
+  if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=w${width}`
+  if (/^https?:\/\/(www\.)?dropbox\.com\//i.test(s)) {
+    return s.replace(/[?&](dl|raw)=\d/g, '') + (s.includes('?') ? '&raw=1' : '?raw=1')
+  }
+  if (/^https?:\/\/github\.com\/.+\/blob\//i.test(s)) {
+    return s.replace('//github.com/', '//raw.githubusercontent.com/').replace('/blob/', '/')
+  }
+  return /^https?:\/\//i.test(s) ? s : ''
+}
+
+function isDrive(url) {
+  return !!driveId(url)
+}
+
 function debounce(fn, ms) {
   let t
   return (...a) => {
@@ -398,7 +433,9 @@ function initGetButtons() {
       const { ok, data } = await api(`/api/apps/${encodeURIComponent(id)}/download`, { method: 'POST' })
       get.disabled = false
       get.innerHTML = original
-      const url = (ok && data?.url) || fallback
+      // A version-history row links to that exact build, so it must win over
+      // the app-level "latest" URL the API hands back.
+      const url = get.dataset.exact ? fallback || (ok && data?.url) : (ok && data?.url) || fallback
       if (url) {
         toast(`Opening download for ${name}…`, 'success', 'Download started')
         window.open(url, '_blank', 'noopener')
@@ -584,6 +621,7 @@ function initAuthPage(mode) {
   if (!form) return
   const alertBox = $('#auth-alert')
   const next = BOOT.next || ''
+  let startTfa = null
 
   const say = (msg, kind = 'error') => {
     if (!alertBox) return toast(msg, kind)
@@ -651,6 +689,14 @@ function initAuthPage(mode) {
       return
     }
 
+    // Password was right but the account is 2FA-protected: hand over to the
+    // code form with the sealed challenge instead of storing a session.
+    if (data.requires_2fa && data.challenge) {
+      if (alertBox) alertBox.hidden = true
+      if (startTfa) return startTfa(data.challenge, data.message)
+      return say('Two-factor authentication is required, but the code form failed to load. Reload the page.', 'warn')
+    }
+
     if (data.session?.access_token) {
       Session.set(data.session)
       say(mode === 'signup' ? 'Account created — taking you to your console…' : 'Signed in — redirecting…', 'success')
@@ -660,17 +706,221 @@ function initAuthPage(mode) {
     }
   })
 
-  // magic link
-  $('#magic-link-btn')?.addEventListener('click', async () => {
-    const email = String(new FormData(form).get('email') || '').trim()
-    if (!email) return say('Enter your email address first, then request a link.', 'warn')
-    const btn = $('#magic-link-btn')
-    btn.disabled = true
-    const { ok, data } = await api('/api/auth/magic-link', { method: 'POST', body: { email } })
-    btn.disabled = false
-    if (!ok || !data?.success) return say(data?.error || 'Could not send the sign-in link.')
-    say(data.message || 'Sign-in link sent — check your inbox.', 'success')
+  startTfa = initTfa(next)
+}
+
+/* ------------------------ shared 6-digit code boxes ---------------------- */
+/**
+ * Turn a row of single-character inputs into one keyboard-friendly field:
+ * typing advances, backspace retreats, arrows move, and a pasted code spreads
+ * itself across every box. `onComplete` fires once all boxes are filled.
+ */
+function wireDigits(container, onComplete) {
+  const boxes = $$('.otp-box', container)
+  if (!boxes.length) return { boxes, value: () => '', clear: () => {}, focus: () => {} }
+
+  const value = () => boxes.map((b) => b.value.trim()).join('')
+  const clear = () => boxes.forEach((b) => (b.value = ''))
+  const focus = () => boxes[0]?.focus()
+
+  boxes.forEach((box, i) => {
+    box.addEventListener('input', () => {
+      const digits = box.value.replace(/\D/g, '')
+      if (digits.length > 1) {
+        digits.split('').forEach((d, k) => {
+          if (boxes[i + k]) boxes[i + k].value = d
+        })
+        boxes[Math.min(i + digits.length, boxes.length - 1)].focus()
+      } else {
+        box.value = digits
+        if (digits && boxes[i + 1]) boxes[i + 1].focus()
+      }
+      if (value().length === boxes.length) onComplete?.(value())
+    })
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !box.value && boxes[i - 1]) {
+        boxes[i - 1].focus()
+        boxes[i - 1].value = ''
+        e.preventDefault()
+      }
+      if (e.key === 'ArrowLeft' && boxes[i - 1]) boxes[i - 1].focus()
+      if (e.key === 'ArrowRight' && boxes[i + 1]) boxes[i + 1].focus()
+    })
   })
+
+  return { boxes, value, clear, focus }
+}
+
+/* ------------------- two-factor step of the sign-in flow ---------------- */
+/**
+ * Second half of a 2FA-gated login. The password step returns a sealed
+ * `challenge` instead of a session; this form trades that challenge plus a
+ * TOTP (or single-use backup) code for the real session.
+ * Returns the function that reveals it, or null when the form is absent.
+ */
+function initTfa(next) {
+  const pwForm = $('#auth-form')
+  const form = $('#tfa-form')
+  if (!form || !pwForm) return null
+
+  const alertBox = $('#tfa-alert')
+  const challengeInput = $('#tfa-challenge')
+  const hidden = $('#tfa-code')
+  const backupField = $('#tfa-backup-field')
+  const backupInput = $('#tfa-backup-input')
+  const digitWrap = $('#tfa-inputs')
+
+  const say = (msg, kind = 'error') => {
+    if (!alertBox) return toast(msg, kind)
+    alertBox.hidden = false
+    alertBox.className = `auth-alert is-${kind}`
+    alertBox.textContent = msg
+  }
+
+  const digits = wireDigits(digitWrap, () => {
+    if (hidden) hidden.value = digits.value()
+    form.requestSubmit()
+  })
+
+  let usingBackup = false
+  const setBackupMode = (on) => {
+    usingBackup = on
+    if (backupField) backupField.hidden = !on
+    if (digitWrap) digitWrap.hidden = on
+    const btn = $('#tfa-backup')
+    if (btn) {
+      btn.innerHTML = on
+        ? '<i class="fa-solid fa-mobile-screen-button"></i> Use my authenticator app'
+        : '<i class="fa-solid fa-key"></i> Use a backup code'
+    }
+    if (on) backupInput?.focus()
+    else digits.focus()
+  }
+
+  $('#tfa-backup')?.addEventListener('click', () => setBackupMode(!usingBackup))
+
+  $('#tfa-cancel')?.addEventListener('click', () => {
+    form.hidden = true
+    pwForm.hidden = false
+    digits.clear()
+    if (backupInput) backupInput.value = ''
+    if (alertBox) alertBox.hidden = true
+    setBackupMode(false)
+    pwForm.elements.password?.focus()
+  })
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const challenge = challengeInput?.value || ''
+    const code = usingBackup ? String(backupInput?.value || '').trim() : digits.value()
+    if (!challenge) return say('This sign-in attempt expired. Start again.')
+    if (!code || (!usingBackup && code.length < 6)) {
+      return say(usingBackup ? 'Enter one of your backup codes.' : 'Enter all six digits.', 'warn')
+    }
+
+    const btn = $('#tfa-verify')
+    const label = btn.innerHTML
+    btn.disabled = true
+    btn.innerHTML = '<span class="spinner spinner-xs"></span> Verifying…'
+
+    const { ok, data } = await api('/api/auth/2fa/verify', { method: 'POST', body: { challenge, code } })
+    btn.disabled = false
+    btn.innerHTML = label
+
+    if (!ok || !data?.success) {
+      digits.clear()
+      digits.focus()
+      return say(data?.error || 'That code was not accepted.')
+    }
+    if (!data.session?.access_token) return say('Verified, but no session came back. Try again.', 'warn')
+
+    Session.set(data.session)
+    if (data.used_backup_code) {
+      toast(`Backup code used — ${data.backup_codes_left ?? 0} left.`, 'warn', 'Backup code')
+    }
+    say('Verified — taking you to your console…', 'success')
+    setTimeout(() => (location.href = next || '/developer'), 600)
+  })
+
+  return (challenge, message) => {
+    if (challengeInput) challengeInput.value = challenge || ''
+    pwForm.hidden = true
+    form.hidden = false
+    setBackupMode(false)
+    digits.clear()
+    if (message) say(message, 'info')
+    digits.focus()
+  }
+}
+
+/* ---------------------- Google OAuth return handler --------------------- */
+/**
+ * Lands here after Supabase finishes the Google handshake. Supabase either
+ * drops tokens in the URL fragment (implicit) or a `?code=` we exchange
+ * server-side (PKCE). Either way we store the session and move on.
+ */
+async function initAuthCallback() {
+  const note = $('#callback-note')
+  const state = $('#callback-state')
+  const alertBox = $('#callback-alert')
+  const next = BOOT.next || '/developer'
+
+  const fail = (msg) => {
+    if (state) {
+      state.innerHTML = `<span class="callback-spinner is-error"><i class="fa-solid fa-circle-exclamation"></i></span>
+        <h1>Sign-in did not complete</h1>
+        <p class="auth-sub">${escHtml(msg)}</p>
+        <a class="btn btn-primary" href="/auth/login"><i class="fa-solid fa-right-to-bracket"></i> Back to sign in</a>`
+    }
+    if (alertBox) {
+      alertBox.hidden = false
+      alertBox.className = 'auth-alert is-error'
+      alertBox.textContent = msg
+    }
+  }
+
+  const done = () => {
+    if (state) {
+      state.innerHTML = `<span class="callback-spinner is-ok"><i class="fa-solid fa-circle-check"></i></span>
+        <h1>You are signed in</h1>
+        <p class="auth-sub">Taking you to your console…</p>`
+    }
+    setTimeout(() => (location.href = next), 500)
+  }
+
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''))
+  const query = new URLSearchParams(location.search)
+
+  const errDesc = hash.get('error_description') || query.get('error_description') || hash.get('error') || query.get('error')
+  if (errDesc) return fail(decodeURIComponent(errDesc.replace(/\+/g, ' ')))
+
+  const accessToken = hash.get('access_token')
+  if (accessToken) {
+    Session.set({
+      access_token: accessToken,
+      refresh_token: hash.get('refresh_token') || '',
+      expires_in: Number(hash.get('expires_in') || 3600),
+      token_type: hash.get('token_type') || 'bearer'
+    })
+    history.replaceState(null, '', location.pathname + location.search)
+    const me = await whoami(true)
+    if (!me) return fail('Signed in with Google, but the session was rejected. Try again.')
+    return done()
+  }
+
+  const code = query.get('code')
+  if (code) {
+    if (note) note.textContent = 'Exchanging your Google authorization…'
+    const { ok, data } = await api('/api/auth/oauth/exchange', { method: 'POST', body: { code } })
+    if (!ok || !data?.success || !data.session?.access_token) {
+      return fail(data?.error || 'Google sign-in could not be completed.')
+    }
+    Session.set(data.session)
+    return done()
+  }
+
+  if (Session.token()) return done()
+  fail('No sign-in details came back from Google. Please start again.')
 }
 
 /* ==================== DEVELOPER CONSOLE ==================== */
@@ -725,6 +975,30 @@ function profileBanner(me) {
   </div>`
 }
 
+/**
+ * Reflect real progress on the 1-2-3 stepper: the profile step is only "done"
+ * once a developers row exists, and the submit step only once an app exists.
+ */
+function paintStepper(me, appCount) {
+  const stepper = $('#dev-stepper')
+  if (!stepper) return
+  const hasProfile = !!me?.developer
+  const mark = (name, done, blocked) => {
+    const li = stepper.querySelector(`[data-step="${name}"]`)
+    if (!li) return
+    li.classList.toggle('is-done', !!done)
+    li.classList.toggle('is-blocked', !!blocked)
+    const num = li.querySelector('.step-num')
+    if (num) num.innerHTML = done ? '<i class="fa-solid fa-check"></i>' : num.dataset.n || num.textContent
+  }
+  $$('.step-num', stepper).forEach((n) => {
+    if (!n.dataset.n) n.dataset.n = n.textContent.trim()
+  })
+  mark('profile', hasProfile, false)
+  mark('submit', hasProfile && appCount > 0, !hasProfile)
+  mark('update', appCount > 0, !hasProfile || !appCount)
+}
+
 /** One row in the developer app lists. */
 function devAppRow(a, compact = false) {
   const published = a.status === 'published'
@@ -752,9 +1026,10 @@ function devAppRow(a, compact = false) {
       ${
         compact
           ? `<a class="btn btn-outline btn-sm" href="/developer/apps"><i class="fa-solid fa-pen-to-square"></i></a>`
-          : `<button class="btn btn-outline btn-sm js-edit" type="button" title="Edit"><i class="fa-solid fa-pen-to-square"></i></button>
+          : `<button class="btn btn-outline btn-sm js-edit" type="button" title="Edit listing"><i class="fa-solid fa-pen-to-square"></i></button>
+             <button class="btn btn-primary btn-sm js-release" type="button" title="Ship an update"><i class="fa-solid fa-rocket"></i> Update</button>
              <button class="btn btn-ghost btn-sm js-toggle" type="button" title="${published ? 'Unpublish' : 'Publish'}">
-               <i class="fa-solid ${published ? 'fa-eye-slash' : 'fa-rocket'}"></i>
+               <i class="fa-solid ${published ? 'fa-eye-slash' : 'fa-cloud-arrow-up'}"></i>
              </button>
              <button class="btn btn-danger btn-sm js-delete" type="button" title="Delete"><i class="fa-solid fa-trash"></i></button>`
       }
@@ -778,6 +1053,7 @@ async function initDevDashboard() {
 
   const { ok, data } = await api('/api/developer/apps', { auth: true })
   const list = $('#dev-app-list')
+  paintStepper(me, (data?.apps || []).length)
 
   if (!ok || !data?.success) {
     if (list) list.innerHTML = `<div class="banner banner-error"><i class="fa-solid fa-circle-exclamation"></i><div><strong>Could not load your apps</strong><p>${escHtml(data?.error || 'Unknown error')}</p></div></div>`
@@ -817,6 +1093,8 @@ async function initDevApps() {
   const list = $('#manage-list')
   const dialog = $('#edit-dialog')
   const editForm = $('#edit-form')
+  const releaseDialog = $('#release-dialog')
+  const releaseForm = $('#release-form')
   let apps = []
   let filter = 'all'
   let query = ''
@@ -845,6 +1123,7 @@ async function initDevApps() {
     }
     apps = data.apps || []
     render()
+    paintStepper(me, apps.length)
   }
 
   await load()
@@ -874,6 +1153,96 @@ async function initDevApps() {
   editIsFree?.addEventListener('change', syncEditPrice)
 
   $$('[data-close-dialog]', dialog || document).forEach((b) => b.addEventListener('click', () => dialog?.close()))
+  $$('[data-close-dialog]', releaseDialog || document).forEach((b) =>
+    b.addEventListener('click', () => releaseDialog?.close())
+  )
+
+  /* ------------------- app update (release) handling -------------------- */
+
+  const bumpPatch = (v) => {
+    const parts = String(v || '1.0.0').split('.')
+    while (parts.length < 3) parts.push('0')
+    const last = parseInt(parts[parts.length - 1], 10)
+    parts[parts.length - 1] = String((Number.isNaN(last) ? 0 : last) + 1)
+    return parts.join('.')
+  }
+
+  const versionItem = (v, i) => {
+    const when = v.released_at || v.release_date || v.created_at
+    const num = v.version || v.version_number
+    return `<li class="version-item${i === 0 ? ' is-latest' : ''}">
+      <div class="version-head">
+        <strong>v${escHtml(num)}</strong>
+        ${i === 0 ? '<span class="pill pill-free">Latest</span>' : ''}
+        ${when ? `<time>${new Date(when).toLocaleDateString()}</time>` : ''}
+      </div>
+      ${v.release_notes ? `<p class="version-notes">${escHtml(v.release_notes)}</p>` : '<p class="version-notes muted">No release notes.</p>'}
+    </li>`
+  }
+
+  const loadHistory = async (appId) => {
+    const box = $('#release-history')
+    if (!box) return
+    box.innerHTML = '<p class="muted">Loading…</p>'
+    const { ok, data } = await api(`/api/developer/apps/${encodeURIComponent(appId)}/versions`, { auth: true })
+    const versions = (ok && data?.versions) || []
+    box.innerHTML = versions.length
+      ? versions.map(versionItem).join('')
+      : '<p class="muted">No releases recorded yet. Publishing this update creates the first entry.</p>'
+  }
+
+  const openRelease = async (app) => {
+    if (!releaseForm || !releaseDialog) return
+    releaseForm.reset()
+    releaseForm.elements.id.value = app.id
+    releaseForm.elements.version.value = bumpPatch(app.version)
+    releaseForm.elements.download_url.value = app.download_url || ''
+    const nameEl = $('#release-app-name')
+    if (nameEl) nameEl.textContent = app.name
+    const curEl = $('#release-current-version')
+    if (curEl) curEl.textContent = `v${app.version || '1.0.0'}`
+    releaseDialog.showModal()
+    await loadHistory(app.id)
+  }
+
+  releaseForm?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const fd = new FormData(releaseForm)
+    const id = String(fd.get('id'))
+    const body = {
+      version: String(fd.get('version') || '').trim(),
+      min_version: String(fd.get('min_version') || '').trim() || undefined,
+      release_notes: String(fd.get('release_notes') || '').trim() || undefined,
+      download_url: String(fd.get('download_url') || '').trim() || undefined,
+      drive_link: String(fd.get('drive_link') || '').trim() || undefined,
+      file_size: fd.get('file_size') ? Number(fd.get('file_size')) : undefined,
+      version_code: fd.get('version_code') ? Number(fd.get('version_code')) : undefined,
+      is_auto_update: fd.get('is_auto_update') === '1',
+      force_update: fd.get('force_update') === '1',
+    }
+    if (!body.version) return toast('A new version number is required.', 'warn')
+
+    const btn = releaseForm.querySelector('button[type="submit"]')
+    btn.disabled = true
+    const { ok, data } = await api(`/api/developer/apps/${encodeURIComponent(id)}/versions`, {
+      method: 'POST',
+      auth: true,
+      body,
+    })
+    btn.disabled = false
+
+    if (!ok || !data?.success) {
+      return toast(data?.hint || data?.error || 'Could not publish the update.', 'error', 'Update failed')
+    }
+    toast(
+      `Version ${body.version} published${data.previous_version ? ` (was ${data.previous_version})` : ''}.`,
+      'success',
+      'Update live'
+    )
+    await loadHistory(id)
+    releaseForm.elements.version.value = bumpPatch(body.version)
+    await load()
+  })
 
   // Row actions
   list.addEventListener('click', async (e) => {
@@ -891,13 +1260,23 @@ async function initDevApps() {
       editForm.elements.version.value = app.version || ''
       editForm.elements.icon_url.value = app.icon_url || ''
       editForm.elements.download_url.value = app.download_url || ''
-      editForm.elements.website.value = app.website || ''
+      editForm.elements.website_link.value = app.website_link || app.website || ''
+      editForm.elements.google_drive_link.value = app.drive_share_url || ''
+      editForm.elements.privacy_policy_link.value = app.privacy_policy_link || ''
+      editForm.elements.change_log.value = app.change_log || ''
+      editForm.elements.auto_update.value = app.auto_update === false ? 'false' : 'true'
+      editForm.elements.update_available.checked = app.update_available === true
       editForm.elements.support_email.value = app.support_email || ''
       editForm.elements.is_free.value = app.is_free ? 'true' : 'false'
       editForm.elements.price.value = app.price ?? 0
       editForm.elements.status.value = app.status === 'published' ? 'published' : 'draft'
       syncEditPrice()
       dialog?.showModal()
+      return
+    }
+
+    if (e.target.closest('.js-release')) {
+      await openRelease(app)
       return
     }
 
@@ -936,7 +1315,12 @@ async function initDevApps() {
       version: String(fd.get('version') || '').trim(),
       icon_url: String(fd.get('icon_url') || '').trim(),
       download_url: String(fd.get('download_url') || '').trim(),
-      website: String(fd.get('website') || '').trim(),
+      website_link: String(fd.get('website_link') || '').trim(),
+      google_drive_link: String(fd.get('google_drive_link') || '').trim(),
+      privacy_policy_link: String(fd.get('privacy_policy_link') || '').trim(),
+      change_log: String(fd.get('change_log') || '').trim(),
+      auto_update: fd.get('auto_update') !== 'false',
+      update_available: fd.get('update_available') === '1',
       support_email: String(fd.get('support_email') || '').trim(),
       is_free: isFree,
       price: isFree ? 0 : Number(fd.get('price')) || 0,
@@ -985,6 +1369,21 @@ async function initDevSubmit() {
   const form = $('#submit-form')
   if (!form) return
 
+  // Step 1 is mandatory: without a developers row the insert would be rejected
+  // by RLS anyway, so show the "complete your profile" card instead of a form
+  // that cannot succeed.
+  const locked = $('#submit-locked')
+  const stage = $('#submit-stage')
+  if (!me.developer) {
+    if (locked) locked.hidden = false
+    if (stage) stage.hidden = true
+    paintStepper(me, 0)
+    return
+  }
+  if (locked) locked.hidden = true
+  if (stage) stage.hidden = false
+  paintStepper(me, 1)
+
   const devName = me.developer?.developer_name || me.user?.metadata?.developer_name || 'Your studio'
   const pvDev = $('#pv-dev')
   if (pvDev) pvDev.textContent = devName
@@ -1027,6 +1426,27 @@ async function initDevSubmit() {
     const banner = $('#live-preview .app-card-banner')
     if (banner) banner.style.setProperty('--cat-color', color)
 
+    // Screenshot strip preview — Drive share links are rewritten so the
+    // developer sees the real thumbnail before submitting.
+    const shots = String(fd.get('screenshots') || '')
+      .split(/\r?\n/)
+      .map((s) => directImage(s.trim(), 640))
+      .filter(Boolean)
+    let rail = $('#pv-shots')
+    if (!rail && shots.length) {
+      rail = document.createElement('div')
+      rail.id = 'pv-shots'
+      rail.className = 'preview-shots'
+      $('#live-preview')?.appendChild(rail)
+    }
+    if (rail) {
+      rail.hidden = !shots.length
+      rail.innerHTML = shots
+        .slice(0, 6)
+        .map((s) => `<img src="${escHtml(s)}" alt="" loading="lazy" />`)
+        .join('')
+    }
+
     const iconEl = $('#pv-icon')
     if (iconEl) {
       if (icon) {
@@ -1037,7 +1457,7 @@ async function initDevSubmit() {
           img.alt = ''
           iconEl.replaceWith(img)
         }
-        $('#pv-icon').src = icon
+        $('#pv-icon').src = directImage(icon, 256)
       } else {
         if (iconEl.tagName === 'IMG') {
           const span = document.createElement('span')
@@ -1084,11 +1504,15 @@ async function initDevSubmit() {
       version: String(fd.get('version') || '1.0.0').trim(),
       icon_url: String(fd.get('icon_url') || '').trim(),
       download_url: String(fd.get('download_url') || '').trim(),
-      website: String(fd.get('website') || '').trim(),
+      website_link: String(fd.get('website_link') || '').trim(),
+      google_drive_link: String(fd.get('google_drive_link') || '').trim(),
+      privacy_policy_link: String(fd.get('privacy_policy_link') || '').trim(),
+      auto_update: fd.get('auto_update') !== 'false',
       support_email: String(fd.get('support_email') || '').trim(),
       is_free: free,
       price: free ? 0 : Number(fd.get('price')) || 0,
       screenshots,
+      release_notes: String(fd.get('release_notes') || '').trim() || undefined,
       status: intent === 'published' ? 'published' : 'draft',
     }
 
@@ -1114,6 +1538,7 @@ async function initDevSubmit() {
 async function initDevProfile() {
   const me = await devGate()
   if (!me) return
+  paintStepper(me, me.developer ? 1 : 0)
 
   const form = $('#profile-form')
   const status = $('#profile-status')
@@ -1138,12 +1563,34 @@ async function initDevProfile() {
     form.elements.description.value = d.description || ''
     form.elements.website.value = d.website || ''
     form.elements.email.value = d.email || me.user?.email || ''
-    form.elements.phone.value = d.phone || ''
-    form.elements.logo_url.value = d.logo_url || ''
+    form.elements.logo_url.value = d.avatar_url || d.logo_url || ''
   } else if (form) {
     form.elements.developer_name.value = me.user?.metadata?.developer_name || ''
     form.elements.email.value = me.user?.email || ''
   }
+
+  // Live preview of how the studio appears on listings.
+  const paintProfilePreview = () => {
+    if (!form) return
+    const fd = new FormData(form)
+    const name = String(fd.get('developer_name') || '').trim() || 'Your studio'
+    const company = String(fd.get('company_name') || '').trim()
+    const logo = directImage(String(fd.get('logo_url') || '').trim(), 256)
+    const nameEl = $('#profile-preview-name')
+    if (nameEl) nameEl.textContent = name
+    const subEl = $('#profile-preview-sub')
+    if (subEl) subEl.textContent = company || 'This is how users see you on every listing.'
+    const img = $('#profile-logo-preview')
+    const fb = $('#profile-logo-fallback')
+    if (img && fb) {
+      img.hidden = !logo
+      fb.hidden = !!logo
+      if (logo) img.src = logo
+      else fb.textContent = initials(name)
+    }
+  }
+  form?.addEventListener('input', debounce(paintProfilePreview, 150))
+  paintProfilePreview()
 
   form?.addEventListener('submit', async (e) => {
     e.preventDefault()
@@ -1154,8 +1601,8 @@ async function initDevProfile() {
       description: String(fd.get('description') || '').trim(),
       website: String(fd.get('website') || '').trim(),
       email: String(fd.get('email') || '').trim(),
-      phone: String(fd.get('phone') || '').trim(),
-      logo_url: String(fd.get('logo_url') || '').trim(),
+      // Stored as developers.avatar_url; logo_url is accepted as an alias.
+      avatar_url: directImage(String(fd.get('logo_url') || '').trim(), 512),
     }
     if (!body.developer_name) return toast('A developer / studio name is required.', 'warn')
 
@@ -1177,9 +1624,21 @@ async function initDevProfile() {
       status.textContent = data.created ? 'Developer profile created.' : 'Profile updated.'
       status.className = 'form-note is-success'
     }
-    toast(data.created ? 'Developer profile created!' : 'Profile updated.', 'success')
+    toast(
+      data.created ? 'Profile created — step 2: submit your first app.' : 'Profile updated.',
+      'success'
+    )
     ME_CACHE = null
     const fresh = await whoami(true)
+    paintStepper(fresh, fresh?.developer ? 1 : 0)
+    if (data.created) {
+      const slot = $('#profile-status')
+      if (slot) {
+        slot.innerHTML =
+          'Developer profile created. <a href="/developer/submit"><strong>Submit your first app \u2192</strong></a>'
+        slot.className = 'form-note is-success'
+      }
+    }
     if (fresh?.developer) {
       set('#acct-dev-id', fresh.developer.developer_id || '—')
       set('#acct-dev-status', fresh.developer.verified ? 'Verified developer' : 'Registered')
@@ -1188,6 +1647,305 @@ async function initDevProfile() {
   })
 
   $('#logout-btn')?.addEventListener('click', doLogout)
+}
+
+/* ------------------------- companion-app deep links --------------------- */
+/**
+ * `intent://` URLs only mean something to Android browsers. Everywhere else we
+ * point the same control at the Play listing for com.app.store so the button is
+ * never a dead end.
+ */
+const PACKAGE_NAME = 'com.app.store'
+
+function initDeepLinks() {
+  const links = $$('[data-open-in-app]')
+  if (!links.length) return
+  const isAndroid = /android/i.test(navigator.userAgent)
+  if (isAndroid) return
+  const play = `https://play.google.com/store/apps/details?id=${PACKAGE_NAME}`
+  links.forEach((a) => {
+    a.href = play
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
+    a.title = `Get the Open Appstore app (${PACKAGE_NAME})`
+  })
+}
+
+/* ------------------------------- security ------------------------------- */
+/** Load a classic (non-module) script once, resolving to true on success. */
+function loadScript(src) {
+  return new Promise((resolve) => {
+    if ($(`script[data-src="${src}"]`)) return resolve(true)
+    const el = document.createElement('script')
+    el.src = src
+    el.async = true
+    el.dataset.src = src
+    el.onload = () => resolve(true)
+    el.onerror = () => resolve(false)
+    document.head.appendChild(el)
+  })
+}
+
+function whenLabel(value) {
+  if (!value) return 'unknown time'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  const mins = Math.round((Date.now() - d.getTime()) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  if (mins < 1440) return `${Math.round(mins / 60)} h ago`
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+/**
+ * /developer/security — turn 2FA on or off and review recent sign-ins.
+ * Enrolment is a three-step flow: mint a secret, scan/type it, confirm a live
+ * code. Backup codes are rendered once, immediately after enabling.
+ */
+async function initDevSecurity() {
+  const me = await devGate()
+  if (!me) return
+
+  const badge = $('#tfa-badge')
+  const statusNote = $('#tfa-status-note')
+  const paneOff = $('#tfa-off')
+  const paneSetup = $('#tfa-setup')
+  const paneOn = $('#tfa-on')
+  const paneCodes = $('#tfa-codes')
+  const setupAlert = $('#tfa-setup-alert')
+  const disableAlert = $('#tfa-disable-alert')
+
+  const alertIn = (box, msg, kind = 'error') => {
+    if (!box) return toast(msg, kind)
+    box.hidden = false
+    box.className = `auth-alert is-${kind}`
+    box.textContent = msg
+  }
+
+  const paint = (state, info = {}) => {
+    if (paneOff) paneOff.hidden = state !== 'off'
+    if (paneSetup) paneSetup.hidden = state !== 'setup'
+    if (paneOn) paneOn.hidden = state !== 'on'
+    if (badge) {
+      const map = {
+        off: ['is-off', '<i class="fa-solid fa-shield-halved"></i> Not protected'],
+        setup: ['is-pending', '<i class="fa-solid fa-hourglass-half"></i> Finishing setup'],
+        on: ['is-on', '<i class="fa-solid fa-circle-check"></i> Protected']
+      }
+      const [cls, label] = map[state] || map.off
+      badge.className = `tfa-badge ${cls}`
+      badge.innerHTML = label
+    }
+    if (statusNote) {
+      statusNote.textContent =
+        state === 'on'
+          ? 'Two-factor authentication is on for this account.'
+          : state === 'setup'
+            ? 'Scan the key and confirm a code to finish switching it on.'
+            : 'Anyone with your password can sign in. Add a second step below.'
+    }
+    if (state === 'on' && $('#tfa-codes-left')) {
+      const left = info.backup_codes_left ?? 0
+      $('#tfa-codes-left').textContent = left
+        ? `${left} backup code${left === 1 ? '' : 's'} remaining.`
+        : 'No backup codes left — turn 2FA off and on again to mint a fresh set.'
+    }
+  }
+
+  const refresh = async () => {
+    const { ok, data } = await api('/api/auth/2fa', { auth: true })
+    if (!ok || !data?.success) {
+      paint('off')
+      if (badge) {
+        badge.className = 'tfa-badge is-off'
+        badge.innerHTML = '<i class="fa-solid fa-circle-exclamation"></i> Unavailable'
+      }
+      if (statusNote) statusNote.textContent = data?.error || 'Could not read your security settings.'
+      return null
+    }
+    paint(data.enabled ? 'on' : 'off', data)
+    return data
+  }
+
+  /* ---- enrolment ---- */
+  let pendingSecret = ''
+
+  const renderQr = async (uri) => {
+    const canvas = $('#tfa-qr-canvas')
+    const wrap = $('#tfa-qr')
+    if (!canvas || !wrap) return
+    const ready = await loadScript('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js')
+    if (!ready || !window.QRCode?.toCanvas) {
+      wrap.innerHTML = '<p class="muted"><i class="fa-solid fa-triangle-exclamation"></i> QR code unavailable offline — type the key below instead.</p>'
+      return
+    }
+    window.QRCode.toCanvas(canvas, uri, { width: 180, margin: 1 }, (err) => {
+      if (err) wrap.innerHTML = '<p class="muted">Could not draw the QR code — type the key below instead.</p>'
+    })
+  }
+
+  $('#tfa-start')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget
+    const label = btn.innerHTML
+    btn.disabled = true
+    btn.innerHTML = '<span class="spinner spinner-xs"></span> Preparing…'
+    const { ok, data } = await api('/api/auth/2fa/setup', { method: 'POST', auth: true, body: {} })
+    btn.disabled = false
+    btn.innerHTML = label
+    if (!ok || !data?.success) return toast(data?.error || 'Could not start 2FA setup.', 'error', 'Setup failed')
+    pendingSecret = data.secret
+    if ($('#tfa-secret')) $('#tfa-secret').textContent = data.secret.replace(/(.{4})/g, '$1 ').trim()
+    paint('setup')
+    await renderQr(data.otpauth_uri)
+    setupDigits.clear()
+    setupDigits.focus()
+  })
+
+  $('#tfa-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(pendingSecret)
+      toast('Secret key copied.', 'success')
+    } catch {
+      toast('Copy failed — select the key manually.', 'warn')
+    }
+  })
+
+  $('#tfa-cancel-setup')?.addEventListener('click', async () => {
+    if (setupAlert) setupAlert.hidden = true
+    await refresh()
+  })
+
+  const enableForm = $('#tfa-enable-form')
+  const setupDigits = wireDigits($('#tfa-setup-inputs'), () => enableForm?.requestSubmit())
+
+  enableForm?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    if (setupAlert) setupAlert.hidden = true
+    const code = setupDigits.value()
+    if (code.length < 6) return alertIn(setupAlert, 'Enter all six digits of the current code.', 'warn')
+    const btn = enableForm.querySelector('button[type="submit"]')
+    const label = btn.innerHTML
+    btn.disabled = true
+    btn.innerHTML = '<span class="spinner spinner-xs"></span> Turning on…'
+    const { ok, data } = await api('/api/auth/2fa/enable', { method: 'POST', auth: true, body: { code } })
+    btn.disabled = false
+    btn.innerHTML = label
+    if (!ok || !data?.success) {
+      setupDigits.clear()
+      setupDigits.focus()
+      return alertIn(setupAlert, data?.error || 'That code did not match.')
+    }
+    showBackupCodes(data.backup_codes || [])
+    toast(data.message || 'Two-factor authentication is on.', 'success', '2FA enabled')
+    await refresh()
+    await loadActivity()
+  })
+
+  /* ---- backup codes ---- */
+  let lastCodes = []
+  const showBackupCodes = (codes) => {
+    lastCodes = codes
+    const list = $('#backup-codes-list')
+    if (!list) return
+    list.innerHTML = codes.map((c) => `<li><code>${escHtml(c)}</code></li>`).join('')
+    if (paneCodes) paneCodes.hidden = !codes.length
+  }
+
+  $('#tfa-copy-codes')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(lastCodes.join('\n'))
+      toast('Backup codes copied.', 'success')
+    } catch {
+      toast('Copy failed — select them manually.', 'warn')
+    }
+  })
+
+  $('#tfa-download-codes')?.addEventListener('click', () => {
+    const body = [
+      'Open Appstore — two-factor backup codes',
+      `Account: ${me.user?.email || ''}`,
+      `Generated: ${new Date().toISOString()}`,
+      '',
+      ...lastCodes,
+      '',
+      'Each code works once. Keep this file somewhere safe.'
+    ].join('\n')
+    const url = URL.createObjectURL(new Blob([body], { type: 'text/plain' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'open-appstore-backup-codes.txt'
+    a.click()
+    URL.revokeObjectURL(url)
+  })
+
+  $('#tfa-codes-done')?.addEventListener('click', () => {
+    if (paneCodes) paneCodes.hidden = true
+    lastCodes = []
+  })
+
+  /* ---- disable ---- */
+  const disableForm = $('#tfa-disable-form')
+  disableForm?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    if (disableAlert) disableAlert.hidden = true
+    const code = String($('#tfa-disable-code')?.value || '').trim()
+    if (!code) return alertIn(disableAlert, 'Enter a current authenticator code or a backup code.', 'warn')
+    const btn = disableForm.querySelector('button[type="submit"]')
+    const label = btn.innerHTML
+    btn.disabled = true
+    btn.innerHTML = '<span class="spinner spinner-xs"></span> Disabling…'
+    const { ok, data } = await api('/api/auth/2fa/disable', { method: 'POST', auth: true, body: { code } })
+    btn.disabled = false
+    btn.innerHTML = label
+    if (!ok || !data?.success) return alertIn(disableAlert, data?.error || 'Could not switch 2FA off.')
+    if ($('#tfa-disable-code')) $('#tfa-disable-code').value = ''
+    if (paneCodes) paneCodes.hidden = true
+    toast(data.message || 'Two-factor authentication switched off.', 'warn', '2FA disabled')
+    await refresh()
+    await loadActivity()
+  })
+
+  /* ---- devices + history ---- */
+  const loadActivity = async () => {
+    const devices = $('#device-list')
+    const logins = $('#login-list')
+    const { ok, data } = await api('/api/auth/sessions', { auth: true })
+    if (!ok || !data?.success) {
+      const msg = `<li class="muted">${escHtml(data?.error || 'Could not load recent activity.')}</li>`
+      if (devices) devices.innerHTML = msg
+      if (logins) logins.innerHTML = ''
+      return
+    }
+    if (devices) {
+      devices.innerHTML = (data.devices || []).length
+        ? data.devices
+            .map(
+              (d) => `<li>
+        <span class="dev-icon"><i class="fa-solid ${/(iphone|android|mobile)/i.test(d.device_name || '') ? 'fa-mobile-screen-button' : 'fa-laptop'}"></i></span>
+        <div><strong>${escHtml(d.device_name || 'Unknown device')}</strong>
+        <small class="muted">${escHtml(d.ip_address || 'no IP')} · last seen ${escHtml(whenLabel(d.last_login || d.created_at))}</small></div>
+      </li>`
+            )
+            .join('')
+        : '<li class="muted">No devices recorded yet.</li>'
+    }
+    if (logins) {
+      logins.innerHTML = (data.history || []).length
+        ? data.history
+            .map(
+              (h) => `<li class="${h.success ? 'is-ok' : 'is-bad'}">
+        <i class="fa-solid ${h.success ? 'fa-circle-check' : 'fa-circle-xmark'}"></i>
+        <div><strong>${escHtml(h.reason || (h.success ? 'Signed in' : 'Failed attempt'))}</strong>
+        <small class="muted">${escHtml(whenLabel(h.login_time))} · ${escHtml(h.ip_address || 'no IP')}</small></div>
+      </li>`
+            )
+            .join('')
+        : '<li class="muted">No sign-ins recorded yet.</li>'
+    }
+  }
+
+  await refresh()
+  await loadActivity()
 }
 
 /* --------------------------------- docs -------------------------------- */
@@ -1215,6 +1973,7 @@ function boot() {
   initNav()
   initSearch()
   initGetButtons()
+  initDeepLinks()
   initAccount()
 
   switch (BOOT.page) {
@@ -1247,6 +2006,12 @@ function boot() {
       break
     case 'dev-profile':
       initDevProfile()
+      break
+    case 'dev-security':
+      initDevSecurity()
+      break
+    case 'auth-callback':
+      initAuthCallback()
       break
     case 'dev-docs':
       initDocs()

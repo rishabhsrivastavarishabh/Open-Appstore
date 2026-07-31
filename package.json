@@ -10,7 +10,7 @@
     "deploy:prod": "npm run build && wrangler pages deploy dist --project-name webapp",
     "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
     "test": "curl -fsS http://localhost:3000/api/health",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "sitemap": "curl -fsS http://localhost:3000/sitemap.xml | head -40"
   },
   "dependencies": {
     "hono": "^4.12.31"
