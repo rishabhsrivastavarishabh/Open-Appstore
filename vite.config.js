@@ -11,5 +11,10 @@ export default defineConfig({
       adapter,
       entry: 'src/index.js'
     })
-  ]
+  ],
+  server: {
+    host: '0.0.0.0',
+    port: 5000,
+    allowedHosts: true
+  }
 })
