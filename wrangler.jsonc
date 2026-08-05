@@ -11,6 +11,8 @@
   "vars": {
     "SUPABASE_URL": "https://edcdqykohvcnwqgiwhke.supabase.co",
     "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkY2RxeWtvaHZjbndxZ2l3aGtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MTg3MTksImV4cCI6MjEwMDM5NDcxOX0.4UqoIwPqSBra34uF_yNcsVNNhL3qujddtBIsmJyqjFQ",
+    // Supabase publishable key (safe to commit — client-side use only).
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_TVzXBIQ3KubKTazWTmreLg_q1H1FyJS",
     // Public storefront id (safe to commit). The service-role key is a SECRET:
     // it lives in .dev.vars locally and in `wrangler pages secret put` for prod.
     "STORE_ID": "store_rJo7T2WZJHoEs6Ar"
