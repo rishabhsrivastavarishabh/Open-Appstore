@@ -24,3 +24,12 @@ outputType = "webview"
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 5001
+externalPort = 3001
+
+[deployment]
+deploymentTarget = "autoscale"
+run = ["node", "dist-server/index.js"]
+build = ["npm", "run", "build:server"]

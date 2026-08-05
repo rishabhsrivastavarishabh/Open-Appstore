@@ -19,6 +19,14 @@ Starts the Vite dev server (with Cloudflare Workers adapter) on **port 5000**. T
 
 **Requires Node.js 22+** — Wrangler (the Cloudflare CLI) mandates it.
 
+## Publishing on Replit (autoscale)
+
+**Build step**: `npm run build:server` — esbundles `server.js` + all sources into `dist-server/index.js` (single Node.js-compatible bundle).
+
+**Run command**: `node dist-server/index.js`
+
+`server.js` wraps the Hono app with `@hono/node-server`, injects public Supabase vars from `wrangler.jsonc`, and serves `/static/*` from `public/static/` (which Cloudflare Pages does automatically but Node.js needs explicitly).
+
 ## Environment variables
 
 Public values are committed in `wrangler.jsonc` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `STORE_ID`) — safe because Supabase RLS protects them.

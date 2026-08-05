@@ -5,12 +5,14 @@
     "dev": "vite",
     "dev:sandbox": "wrangler pages dev dist --ip 0.0.0.0 --port 3000",
     "build": "vite build",
+    "build:server": "esbuild server.js --bundle --platform=node --outfile=dist-server/index.js --format=esm --external:node:fs --external:node:path --external:node:http --external:node:https --external:node:stream --external:node:events --external:node:buffer --external:node:url --external:node:crypto --external:node:os --external:node:util",
     "preview": "wrangler pages dev dist",
     "deploy": "npm run build && wrangler pages deploy dist",
     "deploy:prod": "npm run build && wrangler pages deploy dist --project-name webapp",
     "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
     "test": "curl -fsS http://localhost:3000/api/health",
-    "sitemap": "curl -fsS http://localhost:3000/sitemap.xml | head -40"
+    "sitemap": "curl -fsS http://localhost:3000/sitemap.xml | head -40",
+    "start": "node dist-server/index.js"
   },
   "dependencies": {
     "hono": "^4.12.31"
