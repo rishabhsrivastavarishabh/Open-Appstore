@@ -490,7 +490,7 @@ ${authGate("Sign in to manage security", "Two-factor authentication and sign-in 
           <ol class="tfa-steps">
             <li>
               <strong>Scan this QR code</strong>
-              <div class="tfa-qr" id="tfa-qr"><canvas id="tfa-qr-canvas" width="180" height="180"></canvas></div>
+              <div class="tfa-qr" id="tfa-qr"><span class="spinner spinner-xs"></span></div>
             </li>
             <li>
               <strong>Or type the key by hand</strong>

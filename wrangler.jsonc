@@ -1,20 +1,29 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "webapp",
+  "name": "openappstore",
   "compatibility_date": "2026-07-14",
   "pages_build_output_dir": "./dist",
   "compatibility_flags": [
     "nodejs_compat"
-  ],
-  // Public Supabase project (anon key is safe to expose — protected by RLS).
-  // For production these are also settable via the Cloudflare Pages dashboard.
-  "vars": {
-    "SUPABASE_URL": "https://edcdqykohvcnwqgiwhke.supabase.co",
-    "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVkY2RxeWtvaHZjbndxZ2l3aGtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MTg3MTksImV4cCI6MjEwMDM5NDcxOX0.4UqoIwPqSBra34uF_yNcsVNNhL3qujddtBIsmJyqjFQ",
-    // Supabase publishable key (safe to commit — client-side use only).
-    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_TVzXBIQ3KubKTazWTmreLg_q1H1FyJS",
-    // Public storefront id (safe to commit). The service-role key is a SECRET:
-    // it lives in .dev.vars locally and in `wrangler pages secret put` for prod.
-    "STORE_ID": "store_rJo7T2WZJHoEs6Ar"
-  }
+  ]
+  // Deliberately NO "vars" block here.
+  //
+  // All five values (SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
+  // STORE_ID, AUTH_CHALLENGE_SECRET) are Cloudflare Pages *secrets*.
+  //
+  // Declaring any of them in "vars" AND having a Pages secret of the same name
+  // makes the deploy fail hard:
+  //     Failed to publish your Function.
+  //     Got error: Binding name 'STORE_ID' already in use.
+  // That is exactly the `code 1` deploy failure this project hit.
+  //
+  // Where each environment gets its values:
+  //   Cloudflare Pages -> Pages secrets (dashboard, or the project API).
+  //                       NB: `wrangler pages secret put` REPLACES the whole
+  //                       env-var map rather than merging, so setting them one
+  //                       at a time leaves only the last one bound. Set them
+  //                       together via the dashboard or one API PATCH.
+  //   Local sandbox    -> .dev.vars (gitignored).
+  //   Replit / Node    -> env.public.json for the public defaults, plus Replit
+  //                       Secrets for SUPABASE_SERVICE_ROLE_KEY. See server.js.
 }

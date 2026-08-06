@@ -10,6 +10,9 @@ import {
   sealChallenge,
   openChallenge
 } from "../lib/totp.js";
+// Bundled into the Worker, NOT fetched from a CDN at runtime: the enrolment page
+// used to degrade to "QR code unavailable offline" whenever that request failed.
+import QRCode from "qrcode";
 
 const auth = new Hono();
 
@@ -301,10 +304,27 @@ auth.post("/auth/2fa/setup", async (c) => {
     : await sbAdminWrite(c.env, "user_2fa", "POST", payload);
   if (res.error) return c.json({ success: false, error: res.error }, res.status || 400);
 
+  const uri = otpauthUri({ secret, account: user.email, issuer: ISSUER });
+
+  // Render the QR on the server so the client never needs a third-party script.
+  let qrSvg = null;
+  try {
+    qrSvg = await QRCode.toString(uri, {
+      type: "svg",
+      margin: 1,
+      width: 200,
+      errorCorrectionLevel: "M",
+      color: { dark: "#0b1020ff", light: "#ffffffff" }
+    });
+  } catch {
+    qrSvg = null; // the client falls back to showing the typed key
+  }
+
   return c.json({
     success: true,
     secret,
-    otpauth_uri: otpauthUri({ secret, account: user.email, issuer: ISSUER }),
+    otpauth_uri: uri,
+    qr_svg: qrSvg,
     issuer: ISSUER,
     account: user.email
   });

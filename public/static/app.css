@@ -1422,7 +1422,11 @@ input:focus, select:focus, textarea:focus {
   display: inline-flex; padding: .7rem; border-radius: var(--radius-sm);
   background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow-xs);
 }
-.tfa-qr canvas { display: block; width: 180px; height: 180px; }
+.tfa-qr { min-width: 196px; min-height: 196px; align-items: center; justify-content: center; }
+/* The QR arrives from the server as inline SVG; keep the white quiet zone
+   (scanners need it) and never let a dark theme invert the modules. */
+.tfa-qr-svg { display: block; width: 180px; height: 180px; }
+.tfa-qr p { margin: 0; max-width: 24ch; font-size: .84rem; text-align: center; color: var(--text-2); }
 .tfa-secret { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .35rem; }
 .tfa-secret code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1517,3 +1521,11 @@ input:focus, select:focus, textarea:focus {
   .notfound-art-lg { width: clamp(112px, 42vw, 150px); }
   .empty-state-art .empty-icon { width: 88px; height: 88px; }
 }
+
+/* ------------------------- hidden attribute fix -------------------------- */
+/* The `hidden` attribute only carries UA-stylesheet weight, so any author
+   rule that sets `display` (e.g. `.field { display: flex }` or `.auth-form`)
+   silently overrides it — which is why the 2FA step and its backup-code field
+   were painted on the login page before a challenge existed.
+   This restores the intended behaviour for every element site-wide. */
+[hidden] { display: none !important; }

@@ -15,7 +15,8 @@
     "start": "node dist-server/index.js"
   },
   "dependencies": {
-    "hono": "^4.12.31"
+    "hono": "^4.12.31",
+    "qrcode": "^1.5.3"
   },
   "devDependencies": {
     "@hono/vite-build": "^1.11.1",

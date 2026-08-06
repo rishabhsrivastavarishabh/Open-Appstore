@@ -1680,20 +1680,6 @@ function initDeepLinks() {
 }
 
 /* ------------------------------- security ------------------------------- */
-/** Load a classic (non-module) script once, resolving to true on success. */
-function loadScript(src) {
-  return new Promise((resolve) => {
-    if ($(`script[data-src="${src}"]`)) return resolve(true)
-    const el = document.createElement('script')
-    el.src = src
-    el.async = true
-    el.dataset.src = src
-    el.onload = () => resolve(true)
-    el.onerror = () => resolve(false)
-    document.head.appendChild(el)
-  })
-}
-
 function whenLabel(value) {
   if (!value) return 'unknown time'
   const d = new Date(value)
@@ -1778,18 +1764,27 @@ async function initDevSecurity() {
   /* ---- enrolment ---- */
   let pendingSecret = ''
 
-  const renderQr = async (uri) => {
-    const canvas = $('#tfa-qr-canvas')
+  /* The QR is rendered by the server (see POST /api/auth/2fa/setup) and arrives
+     as an SVG string, so there is no CDN script to fail and nothing to draw on
+     a canvas. Only a server-side render failure falls back to the typed key. */
+  const renderQr = (svg) => {
     const wrap = $('#tfa-qr')
-    if (!canvas || !wrap) return
-    const ready = await loadScript('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js')
-    if (!ready || !window.QRCode?.toCanvas) {
-      wrap.innerHTML = '<p class="muted"><i class="fa-solid fa-triangle-exclamation"></i> QR code unavailable offline — type the key below instead.</p>'
+    if (!wrap) return
+    if (!svg) {
+      wrap.innerHTML =
+        '<p class="muted"><i class="fa-solid fa-triangle-exclamation"></i> ' +
+        'Could not build the QR code — type the key below into your authenticator instead.</p>'
       return
     }
-    window.QRCode.toCanvas(canvas, uri, { width: 180, margin: 1 }, (err) => {
-      if (err) wrap.innerHTML = '<p class="muted">Could not draw the QR code — type the key below instead.</p>'
-    })
+    wrap.innerHTML = svg
+    const el = wrap.querySelector('svg')
+    if (el) {
+      el.removeAttribute('width')
+      el.removeAttribute('height')
+      el.setAttribute('class', 'tfa-qr-svg')
+      el.setAttribute('role', 'img')
+      el.setAttribute('aria-label', 'Two-factor setup QR code')
+    }
   }
 
   $('#tfa-start')?.addEventListener('click', async (e) => {
@@ -1804,7 +1799,7 @@ async function initDevSecurity() {
     pendingSecret = data.secret
     if ($('#tfa-secret')) $('#tfa-secret').textContent = data.secret.replace(/(.{4})/g, '$1 ').trim()
     paint('setup')
-    await renderQr(data.otpauth_uri)
+    renderQr(data.qr_svg)
     setupDigits.clear()
     setupDigits.focus()
   })

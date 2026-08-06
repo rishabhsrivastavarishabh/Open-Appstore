@@ -18,7 +18,7 @@ single lightweight edge application. Every page is real HTML on first paint — 
 | Local dev | http://localhost:3000 |
 | Sandbox preview | https://3000-ie74f2trvh5cfaiw2ngva-5185f4aa.sandbox.novita.ai |
 | GitHub | https://github.com/rishabhsrivastavarishabh/Open-Appstore |
-| Production deploy | not deployed yet — see [§8 Deployment](#8-deployment) |
+| Production deploy | https://openappstore.pages.dev |
 | Health check | `/api/health` |
 | Play listing (companion app) | https://play.google.com/store/apps/details?id=com.app.store |
 
@@ -193,17 +193,53 @@ Seed demo data (safe to re-run): `node scripts/seed.mjs`.
 
 ## 8. Deployment
 
-**Status**: ❌ not deployed yet. Two paths are possible — Genspark-hosted Cloudflare, or your own
-Cloudflare account with an API token in the Deploy panel. Pick one and the deploy can proceed.
+**Status**: ✅ live at **https://openappstore.pages.dev**
 
-Before Google sign-in works in production:
+**Platform**: Cloudflare Pages, project `openappstore`, production branch `main`, in your own
+Cloudflare account ("Open Media Intelligence.") via an API token in the Deploy panel.
+
+```bash
+npm run build
+npx wrangler pages deploy dist --project-name openappstore --branch main
+```
+
+### Environment secrets
+
+All five values are Cloudflare Pages **secrets**, never `vars` in `wrangler.jsonc`:
+
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `STORE_ID`,
+`AUTH_CHALLENGE_SECRET`
+
+⚠️ Two traps worth remembering:
+
+1. **Never declare these in `wrangler.jsonc` `vars`.** A `vars` entry plus a secret of the same
+   name makes Pages reject the deploy with `Binding name '<NAME>' already in use` (exit code 1).
+2. **`wrangler pages secret put` replaces the whole env-var map, it does not merge.** Setting them
+   one at a time leaves only the last one bound. Set them together — either in the dashboard, or
+   with a single `PATCH` to `deployment_configs.production.env_vars` on the Pages project API.
+   A missing `SUPABASE_URL` shows up at runtime as `Invalid URL: undefined/rest/v1/...`.
+
+### Custom domain
+
+`openappstore.openflip.in` is the intended domain. The `openflip.in` zone exists in the Cloudflare
+account but is still **pending** — its nameservers have not been switched to Cloudflare yet. Once
+the zone is active:
+
+```bash
+npx wrangler pages domain add openappstore.openflip.in --project-name openappstore
+```
+
+Note that `openflip.in` / `infinityfree.io` shared PHP hosting **cannot** run this app — it is a
+Cloudflare Worker, so DNS for the subdomain has to point at Cloudflare Pages.
+
+### Before Google sign-in works in production
 
 1. **Rotate the Google client secret** — the one in the uploaded JSON has been exposed in chat.
 2. Supabase Dashboard → **Authentication → Providers → Google**: paste the client id + (new) secret.
 3. Google Cloud Console → **Authorized redirect URIs**: add
    `https://edcdqykohvcnwqgiwhke.supabase.co/auth/v1/callback`.
 4. Google Cloud Console → **Authorized JavaScript origins**: add your deployed site origin.
-5. Register `SUPABASE_SERVICE_ROLE_KEY` as a deployment secret (never in `wrangler.jsonc`).
+5. Google Cloud Console → **Authorized JavaScript origins**: add `https://openappstore.pages.dev`.
 
 ---
 
@@ -218,11 +254,12 @@ Before Google sign-in works in production:
 
 ## 10. Suggested next steps
 
-1. Choose the deployment path and ship it, then finish the Google provider configuration above.
-2. Build the user library + notifications screens on the existing tables.
-3. Replace the interim logo with the final artwork and regenerate the icon set.
-4. Add rate limiting on `/api/auth/*` and a "trusted device" skip for 2FA.
+1. Finish the Google provider configuration above (rotate the secret first).
+2. Switch `openflip.in` nameservers to Cloudflare, then bind the custom domain.
+3. Build the user library + notifications screens on the existing tables.
+4. Replace the interim logo with the final artwork and regenerate the icon set.
+5. Add rate limiting on `/api/auth/*` and a "trusted device" skip for 2FA.
 
 ---
 
-**Last updated**: 2026-07-31
+**Last updated**: 2026-08-06
