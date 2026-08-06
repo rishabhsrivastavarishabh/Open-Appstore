@@ -15,6 +15,7 @@ import {
   toAppView
 } from "./lib/types";
 import { layout, esc } from "./views/layout";
+import { notFoundArt } from "./views/components";
 import {
   homePage,
   browsePage,
@@ -294,7 +295,12 @@ app.get("/app/:slug", async (c) => {
   else q.set("app_slug", `eq.${slug}`);
   const { data } = await sbSelect(c.env, "apps", q.toString());
   const row = (data || [])[0];
-  if (!row) return notFound(c);
+  if (!row)
+    return notFound(c, {
+      title: "App not found",
+      heading: "No app found",
+      message: `We couldn't find an app at "${slug}". It may have been unpublished, renamed, or the link is wrong.`
+    });
   const app_ = toAppView(row);
   const [devRes, moreRes, similarRes, reviewsRes, versionsRes] = await Promise.all([
     app_.developer_id ? sbSelect(
@@ -384,7 +390,12 @@ app.get("/developer-profile/:id", async (c) => {
     `select=${DEV_SELECT}&id=eq.${id}&limit=1`
   );
   const developer = (data || [])[0];
-  if (!developer) return notFound(c);
+  if (!developer)
+    return notFound(c, {
+      title: "Developer not found",
+      heading: "No developer found",
+      message: "That developer profile doesn't exist or is no longer listed."
+    });
   const apps = await fetchApps(
     c.env,
     `select=${APP_SELECT_WITH_DEV}&developer_id=eq.${id}&status=eq.published&order=${ORDER.popular}&limit=100`
@@ -613,15 +624,18 @@ app.get(
     })
   )
 );
-function notFound(c) {
+function notFound(c, opts = {}) {
+  const heading = opts.heading || "We couldn't find that page";
+  const message = opts.message || "The app or page you're looking for may have been unpublished or moved.";
   return c.html(
     layout({
-      title: "Not found",
+      title: opts.title || "Not found",
       body: raw(`
-<section class="error-page">
+<section class="error-page error-page-art">
+  ${notFoundArt("notfound-art notfound-art-lg")}
   <span class="error-code">404</span>
-  <h1>We couldn't find that page</h1>
-  <p>The app or page you're looking for may have been unpublished or moved.</p>
+  <h1>${esc(heading)}</h1>
+  <p>${esc(message)}</p>
   <div class="gate-actions">
     <a class="btn btn-primary" href="/"><i class="fa-solid fa-house"></i> Back to store</a>
     <a class="btn btn-outline" href="/apps"><i class="fa-solid fa-grip"></i> Browse apps</a>

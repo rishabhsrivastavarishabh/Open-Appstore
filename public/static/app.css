@@ -1491,3 +1491,29 @@ input:focus, select:focus, textarea:focus {
   .tfa-confirm > .btn { align-self: stretch; }
   .open-in-app .btn { margin-left: 0; width: 100%; justify-content: center; }
 }
+
+/* ---------------------- "no app found" illustration ---------------------- */
+/* The dark strokes of the artwork use currentColor so the mark stays legible
+   on both themes; the teal accent is baked into the SVG. */
+.notfound-art {
+  width: 100%; height: 100%; display: block;
+  color: var(--text);
+  overflow: visible;
+}
+.notfound-art-lg { width: clamp(132px, 34vw, 188px); height: auto; margin: 0 auto 1.25rem; }
+
+/* The artwork needs no tinted plate behind it, unlike the glyph version. */
+.empty-state-art .empty-icon {
+  width: 108px; height: 108px; border-radius: 0;
+  background: none; padding: 0;
+}
+.empty-state-art.empty-state-sm .empty-icon { width: 82px; height: 82px; }
+.empty-state-art h3 { margin-top: 1.15rem; }
+
+.error-page-art .error-code { font-size: 3.4rem; display: block; margin-top: .2rem; }
+.error-page-art h1 { margin-top: .35rem; }
+
+@media (max-width: 560px) {
+  .notfound-art-lg { width: clamp(112px, 42vw, 150px); }
+  .empty-state-art .empty-icon { width: 88px; height: 88px; }
+}

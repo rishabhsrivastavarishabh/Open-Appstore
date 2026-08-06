@@ -70,7 +70,7 @@ ${hero.length ? `<section class="section" id="featured-section">
 
 <section class="section" id="trending-section">
   ${sectionHead("Trending now", "Most downloaded across the store", { href: "/top-charts", label: "Top charts" })}
-  ${d.apps.length ? `<div class="app-grid">${d.apps.slice(0, 8).map(appCard).join("")}</div>` : emptyState("fa-box-open", "No apps yet", "Once developers publish apps they will appear here.", { href: "/developer/submit", label: "Publish the first app" })}
+  ${d.apps.length ? `<div class="app-grid">${d.apps.slice(0, 8).map(appCard).join("")}</div>` : emptyState(null, "No apps yet", "Once developers publish apps they will appear here.", { href: "/developer/submit", label: "Publish the first app" })}
 </section>
 
 ${activeCats.length ? `<section class="section" id="categories-section">
@@ -180,7 +180,7 @@ function browsePage(opts) {
     <div id="results-container" class="app-grid" data-view="grid">
       ${apps.length ? apps.map(appCard).join("") : ""}
     </div>
-    ${apps.length ? "" : emptyState("fa-magnifying-glass", "No apps match those filters", "Try a broader search or clear your filters.", {
+    ${apps.length ? "" : emptyState(null, "No apps match those filters", "Try a broader search or clear your filters.", {
     href: "/apps",
     label: "Clear filters"
   })}
@@ -212,7 +212,7 @@ function chartsPage(d) {
   const tab = (id, label, icon, apps, ranked = true) => `
   <div class="chart-panel" id="chart-${id}" role="tabpanel" ${id === "popular" ? "" : "hidden"}>
     <div class="app-list app-list-bordered">
-      ${apps.length ? apps.map((a, i) => appRow(a, ranked ? i + 1 : void 0)).join("") : emptyState("fa-chart-simple", "No data yet", "Charts populate as apps gain downloads and ratings.")}
+      ${apps.length ? apps.map((a, i) => appRow(a, ranked ? i + 1 : void 0)).join("") : emptyState(null, "No data yet", "Charts populate as apps gain downloads and ratings.")}
     </div>
   </div>`;
   return raw(`
