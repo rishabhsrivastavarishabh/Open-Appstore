@@ -6,7 +6,7 @@ import {
   sbAuth,
   hasServiceRole,
   bearer
-} from "../lib/supabase";
+} from "../lib/supabase.js";
 import {
   APP_SELECT_WITH_DEV,
   DEV_SELECT,
@@ -14,7 +14,7 @@ import {
   ORDER,
   CATEGORIES,
   toAppView
-} from "../lib/types";
+} from "../lib/types.js";
 import { normalizeDownloadUrl, linkHost, isDriveUrl } from "../lib/media.js";
 const api = new Hono();
 

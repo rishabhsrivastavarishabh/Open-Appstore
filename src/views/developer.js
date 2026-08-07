@@ -1,6 +1,6 @@
 import { raw } from "hono/html";
-import { esc } from "./layout";
-import { CATEGORIES } from "../lib/types";
+import { esc } from "./layout.js";
+import { CATEGORIES } from "../lib/types.js";
 const CAT_OPTIONS = (selected = "") => ["Other", ...CATEGORIES].map((c) => `<option value="${esc(c)}" ${selected === c ? "selected" : ""}>${esc(c)}</option>`).join("");
 /**
  * The publishing pipeline, rendered on every console page so a developer always

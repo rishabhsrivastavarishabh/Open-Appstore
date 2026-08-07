@@ -1,5 +1,5 @@
-import { esc } from "./layout";
-import { CATEGORY_META } from "../lib/types";
+import { esc } from "./layout.js";
+import { CATEGORY_META } from "../lib/types.js";
 function formatCount(n) {
   if (!n || n < 1) return "\u2014";
   if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace(/\.0$/, "")}B`;

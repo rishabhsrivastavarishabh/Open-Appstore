@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { sbAuth, sbSelect, sbWrite, sbAdminWrite, hasServiceRole, serviceKey, bearer } from "../lib/supabase";
+import { sbAuth, sbSelect, sbWrite, sbAdminWrite, hasServiceRole, serviceKey, bearer } from "../lib/supabase.js";
 import {
   randomSecret,
   randomBackupCodes,

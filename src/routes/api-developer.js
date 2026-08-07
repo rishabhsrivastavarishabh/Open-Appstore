@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { sbAuth, sbSelect, sbWrite, sbAdminWrite, hasServiceRole, bearer } from "../lib/supabase";
+import { sbAuth, sbSelect, sbWrite, sbAdminWrite, hasServiceRole, bearer } from "../lib/supabase.js";
 import { normalizeImageUrl, normalizeImageList, normalizeDownloadUrl } from "../lib/media.js";
-import { APP_SELECT_WITH_DEV, toAppView } from "../lib/types";
+import { APP_SELECT_WITH_DEV, toAppView } from "../lib/types.js";
 const dev = new Hono();
 async function requireDev(c) {
   const token = bearer(c.req.header("Authorization"));

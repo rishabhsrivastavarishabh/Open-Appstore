@@ -1,5 +1,5 @@
 import { raw } from "hono/html";
-import { esc } from "./layout";
+import { esc } from "./layout.js";
 import {
   appCard,
   appRow,
@@ -12,7 +12,7 @@ import {
   appIcon,
   priceLabel,
   catMeta
-} from "./components";
+} from "./components.js";
 function homePage(d) {
   const hero = d.featured.length ? d.featured : d.apps.slice(0, 3);
   const spotlight = hero[0];

@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { raw } from "hono/html";
-import apiApps from "./routes/api-apps";
-import apiAuth from "./routes/api-auth";
-import apiDeveloper from "./routes/api-developer";
-import { sbSelect } from "./lib/supabase";
+import apiApps from "./routes/api-apps.js";
+import apiAuth from "./routes/api-auth.js";
+import apiDeveloper from "./routes/api-developer.js";
+import { sbSelect } from "./lib/supabase.js";
 import { normalizeImageUrl } from "./lib/media.js";
 import {
   APP_SELECT_WITH_DEV,
@@ -13,9 +13,9 @@ import {
   ORDER,
   CATEGORIES,
   toAppView
-} from "./lib/types";
-import { layout, esc } from "./views/layout";
-import { notFoundArt } from "./views/components";
+} from "./lib/types.js";
+import { layout, esc } from "./views/layout.js";
+import { notFoundArt } from "./views/components.js";
 import {
   homePage,
   browsePage,
@@ -25,7 +25,7 @@ import {
   developersPage,
   developerProfilePage,
   legalPage
-} from "./views/store";
+} from "./views/store.js";
 import {
   devDashboardPage,
   devAppsPage,
@@ -35,7 +35,7 @@ import {
   devDocsPage,
   authPage,
   authCallbackPage
-} from "./views/developer";
+} from "./views/developer.js";
 
 /** Android application id of the companion Open Appstore client. */
 const PACKAGE_NAME = "com.app.store";
