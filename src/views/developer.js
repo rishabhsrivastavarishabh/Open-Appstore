@@ -573,6 +573,66 @@ function authCallbackPage() {
 `);
 }
 
+/** /developer/api-keys — mint, list and revoke keys for the /api/v1 surface. */
+function devApiKeysPage() {
+  return raw(`
+<section class="dev-head">
+  <div class="dev-head-inner">
+    <nav class="breadcrumb breadcrumb-light">
+      <a href="/developer">Developer</a><i class="fa-solid fa-chevron-right"></i><span>API keys</span>
+    </nav>
+    <h1><i class="fa-solid fa-key"></i> API keys</h1>
+    <p>Keys authenticate the Developer API v1 &mdash; publish apps, ship versions and read analytics from your own scripts and CI.</p>
+  </div>
+</section>
+
+${authGate("Sign in to manage API keys", "API keys belong to your developer account.")}
+
+<div id="dev-content" hidden>
+<div class="dev-body">
+  <section class="section">
+    <div class="card">
+      <h2 class="card-title"><i class="fa-solid fa-plus"></i> Create a key</h2>
+      <p class="muted">Give the key a name you will recognise later &mdash; for example the machine or pipeline that will use it.</p>
+      <form id="key-form" class="form-row-inline" autocomplete="off">
+        <div class="field">
+          <label for="key-name">Key name</label>
+          <input type="text" id="key-name" name="name" maxlength="60" placeholder="CI pipeline" required />
+        </div>
+        <button class="btn btn-primary" type="submit" id="key-create">
+          <i class="fa-solid fa-key"></i> Create key
+        </button>
+      </form>
+      <p class="form-error" id="key-error" hidden></p>
+
+      <div class="key-reveal" id="key-reveal" hidden>
+        <p class="key-reveal-head"><i class="fa-solid fa-circle-exclamation"></i> Copy this key now &mdash; it is shown only once.</p>
+        <div class="key-reveal-row">
+          <code id="key-value">&mdash;</code>
+          <button class="btn btn-outline btn-sm" type="button" id="key-copy"><i class="fa-solid fa-copy"></i> Copy</button>
+        </div>
+        <p class="muted">Store it in a secret manager or your CI settings. If it leaks, revoke it here and create a new one.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title"><i class="fa-solid fa-list"></i> Your keys</h2>
+      <div id="keys-list"><span class="spinner"></span></div>
+      <p class="form-note" id="keys-tier"></p>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title"><i class="fa-solid fa-terminal"></i> Using your key</h2>
+      <pre class="code-block code-block-lg">curl "${"${location.origin}"}/api/v1/whoami" \\
+  -H "Authorization: Bearer dev_your_key_here"</pre>
+      <p><a class="btn btn-outline" href="/developer/docs#v1"><i class="fa-solid fa-book"></i> Read the API reference</a></p>
+    </div>
+  </section>
+</div>
+</div>
+`);
+}
+
 function devDocsPage(origin) {
   const ep = (method, path, desc, auth = false) => `
   <div class="endpoint">
@@ -599,15 +659,236 @@ function devDocsPage(origin) {
 
 <section class="section docs-layout">
   <nav class="docs-nav" aria-label="Docs sections">
+    <a href="#api-keys">API keys</a>
+    <a href="#v1">Developer API v1</a>
+    <a href="#v1-apps">Apps</a>
+    <a href="#v1-analytics">Analytics</a>
+    <a href="#v1-reviews">Reviews</a>
+    <a href="#v1-versions">Versions</a>
+    <a href="#v1-profile">Profile &amp; stats</a>
+    <a href="#v1-errors">Error codes</a>
+    <a href="#v1-limits">Rate limits</a>
+    <a href="#cli">CLI</a>
     <a href="#public-api">Public API</a>
     <a href="#auth-api">Authentication</a>
-    <a href="#developer-api">Developer API</a>
+    <a href="#developer-api">Session API</a>
     <a href="#examples">Examples</a>
     <a href="#errors">Errors</a>
     <a href="#schema">Data model</a>
   </nav>
 
   <div class="docs-body">
+    <div class="card" id="api-keys">
+      <h2 class="card-title"><i class="fa-solid fa-key"></i> API keys</h2>
+      <p>The Developer API is authenticated with a personal API key, not a login session. Keys look like <code>dev_…</code> and never expire — revoke them instead.</p>
+      <p><a class="btn btn-primary" href="/developer/api-keys"><i class="fa-solid fa-plus"></i> Create an API key</a></p>
+      <pre class="code-block code-block-lg">Authorization: Bearer dev_your_key_here</pre>
+      <p class="form-note"><i class="fa-solid fa-triangle-exclamation"></i> The full key is shown <strong>once</strong>, at creation. Store it in a secret manager or your CI settings. Never commit it, and never ship it in client-side code &mdash; a key carries full write access to your listings.</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Requirement</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Base URL</td><td><code>${esc(origin)}/api/v1</code></td></tr>
+            <tr><td>Auth header</td><td><code>Authorization: Bearer dev_…</code> (or <code>X-API-Key</code>)</td></tr>
+            <tr><td>Content type</td><td><code>application/json</code> on every request with a body</td></tr>
+            <tr><td>Prerequisite</td><td>A developer profile must exist, else <code>403 no_developer_profile</code></td></tr>
+            <tr><td>Max active keys</td><td>10 per account</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="v1">
+      <h2 class="card-title"><i class="fa-solid fa-rocket"></i> Developer API v1</h2>
+      <p>Programmatic access to your own listings: create and publish apps, ship versions, read analytics, and reply to reviews. Every response uses the same envelope, so a client only ever branches on <code>success</code>.</p>
+      <h3>Success</h3>
+      <pre class="code-block code-block-lg">{
+  "success": true,
+  "data": { … },
+  "meta": { "limit": 20, "offset": 0, "total": 42, "has_more": true }
+}</pre>
+      <h3>Failure</h3>
+      <pre class="code-block code-block-lg">{
+  "success": false,
+  "error": {
+    "code": "validation_failed",
+    "message": "One or more fields are invalid.",
+    "details": { "app_name": "App name is required." }
+  }
+}</pre>
+      <p class="muted">Scoping is enforced server-side: a key can only ever see and mutate the apps belonging to its own developer profile. Requesting another developer's app id returns <code>404</code>, never their data.</p>
+      ${ep("GET", "/api/v1", "Service descriptor: version, base URL, rate limits and the full endpoint list. No key required.")}
+      ${ep("GET", "/api/v1/whoami", "Confirm a key works. Returns your developer id, tier and rate limit.", true)}
+    </div>
+
+    <div class="card" id="v1-apps">
+      <h2 class="card-title"><i class="fa-solid fa-mobile-screen"></i> Apps</h2>
+      ${ep("GET", "/api/v1/apps", "List your apps, drafts included. Query: limit (1-100, default 20), offset, status=draft|published, category, search, sort=newest|oldest|name|downloads|rating", true)}
+      ${ep("POST", "/api/v1/apps", "Create an app. Required: app_name, description. Returns 201 and seeds version history.", true)}
+      ${ep("GET", "/api/v1/apps/{id}", "One app. Accepts the uuid or the app_slug.", true)}
+      ${ep("PUT", "/api/v1/apps/{id}", "Update an app. PATCH is accepted identically. Only supplied fields change.", true)}
+      ${ep("DELETE", "/api/v1/apps/{id}", "Delete an app permanently.", true)}
+      ${ep("POST", "/api/v1/apps/{id}/publish", "Make an app live. 422 if app_name, description or download_url is missing.", true)}
+      ${ep("POST", "/api/v1/apps/{id}/unpublish", "Return an app to draft, removing it from the store.", true)}
+      <h3>Writable fields</h3>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>app_name</code></td><td>string</td><td>Required on create, max 100 chars</td></tr>
+            <tr><td><code>description</code></td><td>string</td><td>Required on create, max 4000 chars, Markdown allowed</td></tr>
+            <tr><td><code>category</code></td><td>string</td><td>Must be a known category, else <code>422</code></td></tr>
+            <tr><td><code>version</code></td><td>string</td><td>Numeric, e.g. <code>1.2.0</code></td></tr>
+            <tr><td><code>version_code</code></td><td>integer</td><td>Positive integer, must increase per release</td></tr>
+            <tr><td><code>is_free</code> / <code>price</code></td><td>bool / number</td><td><code>price</code> is forced to 0 when <code>is_free</code></td></tr>
+            <tr><td><code>icon_url</code></td><td>url</td><td>Google Drive / Dropbox share links are rewritten to direct URLs</td></tr>
+            <tr><td><code>screenshots</code></td><td>url[]</td><td>Array; same URL rewriting applies</td></tr>
+            <tr><td><code>download_url</code></td><td>url</td><td>Required before publishing</td></tr>
+            <tr><td><code>google_drive_link</code></td><td>url</td><td>Optional mirror</td></tr>
+            <tr><td><code>website</code>, <code>website_link</code>, <code>privacy_policy_link</code></td><td>url</td><td>Optional</td></tr>
+            <tr><td><code>support_email</code></td><td>email</td><td>Shown on the listing</td></tr>
+            <tr><td><code>min_version</code></td><td>string</td><td>Minimum OS version</td></tr>
+            <tr><td><code>auto_update</code></td><td>bool</td><td>Allow silent updates</td></tr>
+            <tr><td><code>change_log</code></td><td>string</td><td>What changed in this release</td></tr>
+            <tr><td><code>status</code></td><td>enum</td><td><code>draft</code> or <code>published</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Create an app</h3>
+      <pre class="code-block code-block-lg">curl -X POST "${esc(origin)}/api/v1/apps" \\
+  -H "Authorization: Bearer $OAS_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "app_name": "My App",
+    "description": "What it does\\u2026",
+    "category": "Productivity",
+    "version": "1.0.0",
+    "download_url": "https://example.com/app.apk",
+    "is_free": true
+  }'</pre>
+    </div>
+
+    <div class="card" id="v1-analytics">
+      <h2 class="card-title"><i class="fa-solid fa-chart-line"></i> Analytics</h2>
+      ${ep("GET", "/api/v1/apps/{id}/analytics", "Downloads, ratings and platform split. Query: period=7d|30d|90d|all (default 30d)", true)}
+      <p class="muted">The daily series is gap-filled &mdash; every day in the window is present, with <code>0</code> where there were no downloads, so you can chart it without patching holes.</p>
+      <pre class="code-block code-block-lg">{
+  "success": true,
+  "data": {
+    "app_id": "…", "app_name": "My App", "period": "30d",
+    "downloads": {
+      "total": 15420,          // lifetime
+      "in_period": 1832,       // within the window
+      "daily_average": 61.07,
+      "timeseries": [{ "date": "2026-08-01", "downloads": 54 }]
+    },
+    "ratings": {
+      "average": 4.6, "total": 312,
+      "distribution": { "1": 4, "2": 6, "3": 18, "4": 82, "5": 202 }
+    },
+    "platforms": [{ "name": "Android", "count": 1401 }]
+  }
+}</pre>
+    </div>
+
+    <div class="card" id="v1-reviews">
+      <h2 class="card-title"><i class="fa-solid fa-comments"></i> Reviews</h2>
+      ${ep("GET", "/api/v1/apps/{id}/reviews", "Reviews for your app, newest first. Query: limit, offset, rating=1..5", true)}
+      ${ep("POST", "/api/v1/apps/{id}/reviews/{review_id}/respond", "Publish a public reply. Body: { response } (max 1000 chars). Posting again replaces the previous reply.", true)}
+      <pre class="code-block code-block-lg">curl -X POST "${esc(origin)}/api/v1/apps/$APP_ID/reviews/$REVIEW_ID/respond" \\
+  -H "Authorization: Bearer $OAS_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"response":"Thanks! Fixed in 1.2.1."}'</pre>
+      <p class="muted">On read, each review carries <code>response: { body, responded_at }</code> (or <code>null</code>). The reviewer's own <code>body</code> is always returned unmodified.</p>
+    </div>
+
+    <div class="card" id="v1-versions">
+      <h2 class="card-title"><i class="fa-solid fa-code-branch"></i> Versions</h2>
+      ${ep("GET", "/api/v1/apps/{id}/versions", "Full release history, newest first.", true)}
+      ${ep("POST", "/api/v1/apps/{id}/versions", "Ship a release. Body: { version, release_notes?, download_url?, file_size?, force_update?, min_version? }. Returns 201.", true)}
+      <p class="muted">Shipping a version bumps the app's <code>latest_version</code>, increments <code>version_code</code>, and flags <code>update_available</code> so installed clients pick it up. Re-posting the current version returns <code>409 conflict</code>.</p>
+      <pre class="code-block code-block-lg">curl -X POST "${esc(origin)}/api/v1/apps/$APP_ID/versions" \\
+  -H "Authorization: Bearer $OAS_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"version":"1.2.0","release_notes":"Faster sync.","force_update":false}'</pre>
+    </div>
+
+    <div class="card" id="v1-profile">
+      <h2 class="card-title"><i class="fa-solid fa-id-badge"></i> Profile &amp; stats</h2>
+      ${ep("GET", "/api/v1/developer/profile", "Your developer profile, verification state and tier.", true)}
+      ${ep("PUT", "/api/v1/developer/profile", "Update developer_name, company_name, description, website, email, avatar_url.", true)}
+      ${ep("GET", "/api/v1/developer/stats", "Portfolio rollup: app counts, downloads, average rating, per-category split and top 5 apps.", true)}
+      <p class="form-note"><i class="fa-solid fa-shield-halved"></i> <code>verified</code> is read-only over the API &mdash; a studio cannot grant itself the verified badge or the higher rate-limit tier.</p>
+    </div>
+
+    <div class="card" id="v1-errors">
+      <h2 class="card-title"><i class="fa-solid fa-triangle-exclamation"></i> Error codes</h2>
+      <p class="muted">Branch on <code>error.code</code>, not on the message &mdash; messages may be reworded.</p>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Code</th><th>Status</th><th>Meaning &amp; fix</th></tr></thead>
+          <tbody>
+            <tr><td><code>missing_api_key</code></td><td><code>401</code></td><td>No <code>Authorization</code> header. Add <code>Bearer dev_…</code></td></tr>
+            <tr><td><code>invalid_api_key</code></td><td><code>401</code></td><td>Malformed or wrong signature. Check for truncation on copy.</td></tr>
+            <tr><td><code>revoked_api_key</code></td><td><code>401</code></td><td>Key was revoked. Create a new one.</td></tr>
+            <tr><td><code>no_developer_profile</code></td><td><code>403</code></td><td>Create your developer profile in the console first.</td></tr>
+            <tr><td><code>forbidden</code></td><td><code>403</code></td><td>Row-level security rejected the write.</td></tr>
+            <tr><td><code>not_found</code></td><td><code>404</code></td><td>No such resource, or it is not yours.</td></tr>
+            <tr><td><code>method_not_allowed</code></td><td><code>405</code></td><td>Wrong verb for that path.</td></tr>
+            <tr><td><code>conflict</code></td><td><code>409</code></td><td>Already in that state (e.g. re-publishing, duplicate version).</td></tr>
+            <tr><td><code>validation_failed</code></td><td><code>422</code></td><td>Read <code>error.details</code> for the per-field reasons.</td></tr>
+            <tr><td><code>rate_limited</code></td><td><code>429</code></td><td>Back off until <code>X-RateLimit-Reset</code>; see <code>Retry-After</code>.</td></tr>
+            <tr><td><code>internal_error</code></td><td><code>500</code></td><td>Upstream failure. Retry with backoff; contact support if it persists.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="v1-limits">
+      <h2 class="card-title"><i class="fa-solid fa-gauge-high"></i> Rate limits</h2>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Tier</th><th>Limit</th><th>Who</th></tr></thead>
+          <tbody>
+            <tr><td><code>free</code></td><td>1,000 requests / hour</td><td>All developers by default</td></tr>
+            <tr><td><code>verified</code></td><td>5,000 requests / hour</td><td>Verified studios</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Every response carries the current budget:</p>
+      <pre class="code-block code-block-lg">X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 987
+X-RateLimit-Reset: 1786095652   # unix seconds</pre>
+      <p class="muted">Limits are counted per API key in a fixed one-hour window. On <code>429</code> the response adds <code>Retry-After</code> in seconds &mdash; sleep for that long rather than retrying immediately.</p>
+      <h3>Recommended backoff</h3>
+      <pre class="code-block code-block-lg">async function callApi(path, init, attempt = 0) {
+  const res = await fetch(path, init);
+  if (res.status !== 429 || attempt >= 5) return res;
+  const wait = Number(res.headers.get('Retry-After') ?? 2 ** attempt);
+  await new Promise((r) => setTimeout(r, wait * 1000));
+  return callApi(path, init, attempt + 1);
+}</pre>
+    </div>
+
+    <div class="card" id="cli">
+      <h2 class="card-title"><i class="fa-solid fa-terminal"></i> Command line</h2>
+      <p>The API is plain REST, so <code>curl</code> plus <code>jq</code> is enough for CI. Export your key once:</p>
+      <pre class="code-block code-block-lg">export OAS_API_KEY="dev_…"
+export OAS_BASE="${esc(origin)}/api/v1"
+
+# List your apps
+curl -s "$OAS_BASE/apps" -H "Authorization: Bearer $OAS_API_KEY" | jq '.data[] | {name, status, downloads}'
+
+# Ship a release, then publish
+curl -s -X POST "$OAS_BASE/apps/$APP_ID/versions" \\
+  -H "Authorization: Bearer $OAS_API_KEY" -H "Content-Type: application/json" \\
+  -d '{"version":"1.3.0","release_notes":"CI release"}' | jq .
+
+curl -s -X POST "$OAS_BASE/apps/$APP_ID/publish" \\
+  -H "Authorization: Bearer $OAS_API_KEY" | jq .</pre>
+      <p class="form-note"><i class="fa-solid fa-circle-info"></i> Store the key as a masked CI secret (GitHub Actions: <code>secrets.OAS_API_KEY</code>). A key in a build log is a compromised key &mdash; revoke it in the console and issue a new one.</p>
+    </div>
+
     <div class="card" id="public-api">
       <h2 class="card-title"><i class="fa-solid fa-globe"></i> Public API</h2>
       ${ep("GET", "/api/apps", "List published apps. Query: limit, offset, category, search, sort=popular|newest|rated|name, featured=true")}
@@ -722,6 +1003,7 @@ const data = await res.json();</pre>
 export {
   authCallbackPage,
   authPage,
+  devApiKeysPage,
   devAppsPage,
   devDashboardPage,
   devDocsPage,

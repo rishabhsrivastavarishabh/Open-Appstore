@@ -1970,6 +1970,152 @@ function initDocs() {
   targets.forEach((t) => io.observe(t))
 }
 
+/* ---------------------------- dev: api keys ---------------------------- */
+async function initDevApiKeys() {
+  const me = await devGate()
+  if (!me) return
+
+  const form = $('#key-form')
+  const nameInput = $('#key-name')
+  const createBtn = $('#key-create')
+  const errBox = $('#key-error')
+  const reveal = $('#key-reveal')
+  const valueEl = $('#key-value')
+  const listEl = $('#keys-list')
+  const tierNote = $('#keys-tier')
+
+  const showError = (msg) => {
+    if (!errBox) return toast(msg, 'error')
+    errBox.hidden = false
+    errBox.textContent = msg
+  }
+  const clearError = () => {
+    if (errBox) errBox.hidden = true
+  }
+
+  const when = (iso) => {
+    if (!iso) return 'never'
+    const d = new Date(iso)
+    return Number.isNaN(d.getTime()) ? 'unknown' : d.toLocaleString()
+  }
+
+  const render = (keys, info) => {
+    if (!listEl) return
+    if (!keys.length) {
+      listEl.innerHTML =
+        '<p class="muted">No API keys yet. Create one above to start using the Developer API.</p>'
+    } else {
+      listEl.innerHTML = `
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Name</th><th>Key</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+            <tbody>
+              ${keys
+                .map(
+                  (k) => `
+                <tr data-key-row="${escHtml(k.id)}">
+                  <td>${escHtml(k.name || 'API key')}</td>
+                  <td><code>${escHtml(k.prefix || 'dev_')}\u2026</code></td>
+                  <td>${escHtml(when(k.created_at))}</td>
+                  <td>${escHtml(when(k.last_used_at))}</td>
+                  <td><button class="btn btn-outline btn-sm" type="button" data-revoke="${escHtml(k.id)}">
+                    <i class="fa-solid fa-trash"></i> Revoke
+                  </button></td>
+                </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>`
+    }
+    if (tierNote && info) {
+      tierNote.innerHTML = `<i class="fa-solid fa-gauge-high"></i> Your tier: <strong>${escHtml(
+        info.tier || 'free'
+      )}</strong> \u2014 ${fmt(info.rate_limit || 1000)} requests per hour, counted per key.`
+    }
+  }
+
+  const load = async () => {
+    const { ok, data } = await api('/api/developer/api-keys', { auth: true })
+    if (!ok || !data?.success) {
+      if (listEl) listEl.innerHTML = '<p class="muted">Could not load your keys.</p>'
+      return
+    }
+    render(data.keys || [], { tier: data.tier, rate_limit: data.rate_limit })
+  }
+
+  // Revoking is destructive and cannot be undone, so confirm first.
+  listEl?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-revoke]')
+    if (!btn) return
+    const id = btn.getAttribute('data-revoke')
+    if (!confirm('Revoke this key? Any script still using it will immediately start getting 401 errors.')) return
+    btn.disabled = true
+    const { ok, data } = await api(`/api/developer/api-keys/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      auth: true,
+    })
+    if (!ok || !data?.success) {
+      btn.disabled = false
+      toast(data?.error || 'Could not revoke that key.', 'error')
+      return
+    }
+    toast('Key revoked.', 'success')
+    await load()
+  })
+
+  form?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    clearError()
+    const name = (nameInput?.value || '').trim()
+    if (!name) return showError('Give the key a name so you can recognise it later.')
+
+    if (createBtn) {
+      createBtn.disabled = true
+      createBtn.innerHTML = '<span class="spinner spinner-xs"></span> Creating\u2026'
+    }
+    const { ok, data } = await api('/api/developer/api-keys', {
+      method: 'POST',
+      auth: true,
+      body: { name },
+    })
+    if (createBtn) {
+      createBtn.disabled = false
+      createBtn.innerHTML = '<i class="fa-solid fa-key"></i> Create key'
+    }
+    if (!ok || !data?.success || !data.key) {
+      return showError(data?.error || 'Could not create a key.')
+    }
+
+    // The secret exists only in this response — surface it prominently.
+    if (reveal) reveal.hidden = false
+    if (valueEl) valueEl.textContent = data.key
+    if (nameInput) nameInput.value = ''
+    toast('Key created — copy it now.', 'success')
+    await load()
+  })
+
+  $('#key-copy')?.addEventListener('click', async () => {
+    const text = valueEl?.textContent || ''
+    if (!text || text === '\u2014') return
+    try {
+      await navigator.clipboard.writeText(text)
+      toast('Key copied to clipboard.', 'success')
+    } catch {
+      // Clipboard access is blocked in some contexts; select it so the user can
+      // copy by hand rather than leaving them with a dead button.
+      const range = document.createRange()
+      range.selectNodeContents(valueEl)
+      const sel = window.getSelection()
+      sel.removeAllRanges()
+      sel.addRange(range)
+      toast('Press Ctrl/Cmd+C to copy the selected key.', 'info')
+    }
+  })
+
+  await load()
+}
+
 /* ------------------------------ bootstrap ------------------------------ */
 function boot() {
   initTheme()
@@ -2012,6 +2158,9 @@ function boot() {
       break
     case 'dev-security':
       initDevSecurity()
+      break
+    case 'dev-api-keys':
+      initDevApiKeys()
       break
     case 'auth-callback':
       initAuthCallback()

@@ -44,7 +44,22 @@ single lightweight edge application. Every page is real HTML on first paint — 
 - `/developer/submit` — new listing (gated until the developer profile exists)
 - `/developer/profile` — studio profile with live preview
 - `/developer/security` — **two-factor authentication**, backup codes, devices, sign-in history
-- `/developer/docs` — the full REST API reference
+- `/developer/api-keys` — **create / list / revoke `dev_…` API keys** (secret shown once)
+- `/developer/docs` — the full REST API reference, including the v1 Developer API
+
+### Developer API v1 (`/api/v1`) — API-key authenticated
+- **15 endpoints**: apps CRUD, publish/unpublish, analytics, reviews + replies, versions,
+  developer profile, portfolio stats, plus `GET /api/v1` (descriptor) and `/whoami`
+- **API keys** — `dev_<b64url>` = HMAC-SHA256-signed payload carrying the user id + key id,
+  so a forged key is rejected with zero database reads. SHA-256 of the key is stored, never the key.
+- **Uniform envelope** — `{ success, data, meta }` / `{ success, error: { code, message, details } }`
+- **11 documented error codes** (`validation_failed`, `rate_limited`, `conflict`, …) — clients
+  branch on `error.code`, never on the message
+- **Rate limits** with `X-RateLimit-Limit/Remaining/Reset` on every response and `Retry-After`
+  on 429 — free 1,000/h, verified studios 5,000/h
+- **Tenant isolation** enforced in one place (`requireKey`), so every query is scoped to the
+  caller's own `developer_id`; another developer's app id returns `404`, never their data
+- `verified` is **read-only** over the API — a studio cannot self-grant the badge or the higher tier
 
 ### Authentication
 - Email + password sign-up / sign-in / password reset
@@ -158,10 +173,14 @@ webapp/
 │   │   ├── supabase.js     # PostgREST/GoTrue fetch client (count=exact support)
 │   │   ├── types.js        # select lists + row → view mappers
 │   │   ├── media.js        # Drive/Dropbox/GitHub link normalisation
-│   │   └── totp.js         # RFC 6238 TOTP, base32, backup codes, sealed challenges
-│   ├── routes/             # api-apps.js · api-auth.js · api-developer.js
+│   │   ├── totp.js         # RFC 6238 TOTP, base32, backup codes, sealed challenges
+│   │   ├── apikey.js       # dev_ key mint/parse/verify + revocation store
+│   │   └── ratelimit.js    # per-key fixed-window budget + X-RateLimit-* headers
+│   ├── routes/             # api-apps.js · api-auth.js · api-developer.js · api-v1.js
 │   └── views/              # layout.js · store.js · developer.js · components.js
 ├── public/static/          # app.js · app.css · logo.svg · icons
+├── migrations/
+│   └── 0002_developer_api_keys.sql   # OPTIONAL relational store (see §11)
 ├── scripts/seed.mjs        # idempotent demo-data seeder
 ├── vite.config.js · wrangler.jsonc · ecosystem.config.cjs
 ```
@@ -259,7 +278,9 @@ Cloudflare Worker, so DNS for the subdomain has to point at Cloudflare Pages.
 3. Build the user library + notifications screens on the existing tables.
 4. Replace the interim logo with the final artwork and regenerate the icon set.
 5. Add rate limiting on `/api/auth/*` and a "trusted device" skip for 2FA.
+6. Run `migrations/0002_developer_api_keys.sql` if you want indexed key lookups, a real
+   `review_responses` table and exact global rate limits (see §11).
 
 ---
 
-**Last updated**: 2026-08-06
+**Last updated**: 2026-08-07

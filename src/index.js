@@ -4,6 +4,7 @@ import { raw } from "hono/html";
 import apiApps from "./routes/api-apps.js";
 import apiAuth from "./routes/api-auth.js";
 import apiDeveloper from "./routes/api-developer.js";
+import apiV1 from "./routes/api-v1.js";
 import { sbSelect } from "./lib/supabase.js";
 import { normalizeImageUrl } from "./lib/media.js";
 import {
@@ -32,6 +33,7 @@ import {
   devSubmitPage,
   devProfilePage,
   devSecurityPage,
+  devApiKeysPage,
   devDocsPage,
   authPage,
   authCallbackPage
@@ -41,6 +43,10 @@ import {
 const PACKAGE_NAME = "com.app.store";
 const app = new Hono();
 app.use("/api/*", cors());
+// The versioned developer API is mounted first: it owns every path under
+// /api/v1 (including its own JSON 404 fallback), so it must match before the
+// unversioned routers get a chance to.
+app.route("/api/v1", apiV1);
 app.route("/api", apiApps);
 app.route("/api", apiAuth);
 app.route("/api", apiDeveloper);
@@ -471,6 +477,18 @@ app.get("/developer/docs", (c) => {
     })
   );
 });
+app.get(
+  "/developer/api-keys",
+  (c) => c.html(
+    layout({
+      title: "API keys",
+      mode: "developer",
+      active: "apikeys",
+      body: devApiKeysPage(),
+      bootstrap: { page: "dev-api-keys" }
+    })
+  )
+);
 app.get(
   "/developer/security",
   (c) => c.html(

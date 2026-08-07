@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { sbAuth, sbSelect, sbWrite, sbAdminWrite, hasServiceRole, bearer } from "../lib/supabase.js";
 import { normalizeImageUrl, normalizeImageList, normalizeDownloadUrl } from "../lib/media.js";
 import { APP_SELECT_WITH_DEV, toAppView } from "../lib/types.js";
+import { listKeys, createKey, revokeKey } from "../lib/apikey.js";
 const dev = new Hono();
 async function requireDev(c) {
   const token = bearer(c.req.header("Authorization"));
@@ -322,6 +323,64 @@ dev.delete("/developer/apps/:id", async (c) => {
   if (error) return c.json({ success: false, error }, status || 400);
   return c.json({ success: true });
 });
+/* ── API keys for the /api/v1 developer surface ─────────────────────────── */
+//
+// These are session-authenticated (a signed-in developer managing their keys in
+// the console). The keys they mint are what authenticate the /api/v1 routes.
+
+/** GET /api/developer/api-keys — my keys, secrets never returned. */
+dev.get("/developer/api-keys", async (c) => {
+  const ctx = await requireDev(c);
+  if (ctx instanceof Response) return ctx;
+  if (!ctx.developer) return c.json({ success: true, keys: [], needs_profile: true });
+  const keys = await listKeys(c.env, ctx.userId);
+  return c.json({
+    success: true,
+    keys: keys.map((k) => ({
+      id: k.id,
+      name: k.name,
+      prefix: k.prefix,
+      created_at: k.created_at,
+      last_used_at: k.last_used_at || null
+    })),
+    tier: ctx.developer.verified ? "verified" : "free",
+    rate_limit: ctx.developer.verified ? 5000 : 1000
+  });
+});
+
+/**
+ * POST /api/developer/api-keys — mint a key.
+ * The full secret is returned exactly once, here; only its hash is stored.
+ */
+dev.post("/developer/api-keys", async (c) => {
+  const ctx = await requireDev(c);
+  if (ctx instanceof Response) return ctx;
+  if (!ctx.developer)
+    return c.json({ success: false, error: "Create your developer profile first", needs_profile: true }, 400);
+
+  const body = await c.req.json().catch(() => ({}));
+  const name = String(body.name || "").trim() || "API key";
+  const { key, record, error } = await createKey(c.env, ctx.userId, name);
+  if (error) return c.json({ success: false, error }, 400);
+
+  return c.json({
+    success: true,
+    // Surfaced once — the client must tell the user to copy it now.
+    key,
+    record: { id: record.id, name: record.name, prefix: record.prefix, created_at: record.created_at }
+  });
+});
+
+/** DELETE /api/developer/api-keys/:id — revoke immediately. */
+dev.delete("/developer/api-keys/:id", async (c) => {
+  const ctx = await requireDev(c);
+  if (ctx instanceof Response) return ctx;
+  if (!ctx.developer) return c.json({ success: false, error: "No developer profile" }, 400);
+  const gone = await revokeKey(c.env, ctx.userId, c.req.param("id"));
+  if (!gone) return c.json({ success: false, error: "No such key" }, 404);
+  return c.json({ success: true });
+});
+
 var api_developer_default = dev;
 export {
   api_developer_default as default

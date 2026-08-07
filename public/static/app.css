@@ -1529,3 +1529,54 @@ input:focus, select:focus, textarea:focus {
    were painted on the login page before a challenge existed.
    This restores the intended behaviour for every element site-wide. */
 [hidden] { display: none !important; }
+
+/* ── developer API keys ──────────────────────────────────────────────────── */
+
+/* Name field + button sit on one line on desktop, stack on narrow screens. */
+.form-row-inline {
+  display: flex;
+  gap: .75rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: .25rem;
+}
+.form-row-inline .field { flex: 1 1 240px; margin-bottom: 0; }
+
+.form-error {
+  margin: .5rem 0 0;
+  color: var(--danger, #dc2626);
+  font-size: .86rem;
+}
+
+/* The one-time key reveal. Deliberately loud: this is the only moment the
+   secret exists, and a user who misses it has to create another key. */
+.key-reveal {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--warn-border, #f59e0b);
+  border-radius: 12px;
+  background: var(--warn-bg, rgba(245, 158, 11, .08));
+}
+.key-reveal-head {
+  margin: 0 0 .6rem;
+  font-weight: 600;
+  color: var(--warn-text, #b45309);
+}
+.key-reveal-row {
+  display: flex;
+  gap: .6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: .5rem;
+}
+.key-reveal-row code {
+  flex: 1 1 320px;
+  padding: .6rem .75rem;
+  border-radius: 8px;
+  background: var(--surface-2, #0b1020);
+  color: var(--text-on-dark, #e2e8f0);
+  font-size: .84rem;
+  /* A key is one long unbroken token — allow it to wrap rather than overflow. */
+  word-break: break-all;
+  user-select: all;
+}
