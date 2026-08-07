@@ -38,6 +38,7 @@ import {
   authPage,
   authCallbackPage
 } from "./views/developer.js";
+import { enabledProviders } from "./lib/oauth.js";
 
 /** Android application id of the companion Open Appstore client. */
 const PACKAGE_NAME = "com.app.store";
@@ -508,7 +509,11 @@ app.get(
       title: "Signing you in",
       body: authCallbackPage(),
       bodyClass: "body-auth",
-      bootstrap: { page: "auth-callback", next: c.req.query("next") || "/developer" }
+      bootstrap: {
+        page: "auth-callback",
+        next: c.req.query("next") || "/developer",
+        provider: c.req.query("provider") || ""
+      }
     })
   )
 );
@@ -517,17 +522,20 @@ for (const [path, mode] of [
   ["/auth/signup", "signup"],
   ["/auth/reset", "reset"]
 ]) {
-  app.get(
-    path,
-    (c) => c.html(
+  app.get(path, async (c) => {
+    // Awaited so the social buttons are in the first-paint HTML rather than
+    // popping in later. enabledProviders() is cached per isolate, so this is a
+    // network round-trip only on a cold isolate.
+    const providers = await enabledProviders(c.env);
+    return c.html(
       layout({
         title: mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : "Reset password",
-        body: authPage(mode),
+        body: authPage(mode, providers),
         bodyClass: "body-auth",
-        bootstrap: { page: `auth-${mode}`, next: c.req.query("next") || "" }
+        bootstrap: { page: `auth-${mode}`, next: c.req.query("next") || "", providers }
       })
-    )
-  );
+    );
+  });
 }
 app.get(
   "/legal/privacy",

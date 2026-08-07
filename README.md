@@ -47,6 +47,26 @@ single lightweight edge application. Every page is real HTML on first paint — 
 - `/developer/api-keys` — **create / list / revoke `dev_…` API keys** (secret shown once)
 - `/developer/docs` — the full REST API reference, including the v1 Developer API
 
+### Social sign-in (OAuth 2.0)
+
+Five providers are supported generically -- Google, GitHub, Facebook, Microsoft
+(`azure`) and Apple. Supabase GoTrue performs the authorization-code + PKCE
+flow, so **no provider client secret exists anywhere in this codebase** or in
+the Worker's environment.
+
+- `GET /api/auth/oauth/{provider}?next=/developer` -- 302 to the provider
+- `GET /api/auth/providers` -- which providers are live right now
+- `GET /api/auth/google` -- kept as an alias so old links keep working
+
+The sign-in page is server-rendered and asks GoTrue which providers are
+actually enabled, so it never shows a button that dead-ends in an error.
+Currently enabled on this deployment: **Google + email/password**. Enabling
+another provider is Supabase-dashboard-only, no redeploy.
+
+`next` is validated as a same-site path; absolute and protocol-relative values
+are replaced with `/developer` to prevent a covert-redirect after sign-in.
+GitHub is asked only for `user:email`, never `repo`.
+
 ### Developer API v1 (`/api/v1`) — API-key authenticated
 - **15 endpoints**: apps CRUD, publish/unpublish, analytics, reviews + replies, versions,
   developer profile, portfolio stats, plus `GET /api/v1` (descriptor) and `/whoami`

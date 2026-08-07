@@ -1369,8 +1369,11 @@ input:focus, select:focus, textarea:focus {
 .auth-alert.is-info { background: var(--brand-soft); color: var(--brand); border-color: color-mix(in srgb, var(--brand) 26%, transparent); }
 
 /* ── Google sign-in ───────────────────────────────────────────────────── */
-.oauth-block { display: flex; flex-direction: column; }
-.btn-google {
+.oauth-block { display: flex; flex-direction: column; gap: .6rem; }
+/* Every provider button shares one neutral shell so no single provider looks
+   like the "real" button and the others like afterthoughts. Only the brand mark
+   differs, which is also what keeps them legible in dark mode. */
+.btn-google, .btn-github, .btn-facebook, .btn-microsoft, .btn-apple {
   gap: .7rem;
   background: var(--surface);
   color: var(--text);
@@ -1378,9 +1381,17 @@ input:focus, select:focus, textarea:focus {
   font-weight: 600;
   box-shadow: var(--shadow-xs);
 }
-.btn-google:hover { border-color: var(--brand); background: var(--surface-2); }
-.btn-google .google-g { flex: 0 0 auto; }
-[data-theme='dark'] .btn-google { background: var(--surface-2); }
+.btn-google:hover, .btn-github:hover, .btn-facebook:hover,
+.btn-microsoft:hover, .btn-apple:hover { border-color: var(--brand); background: var(--surface-2); }
+.btn-google .google-g, .oauth-mark { flex: 0 0 auto; }
+[data-theme='dark'] .btn-google, [data-theme='dark'] .btn-github,
+[data-theme='dark'] .btn-facebook, [data-theme='dark'] .btn-microsoft,
+[data-theme='dark'] .btn-apple { background: var(--surface-2); }
+/* GitHub and Apple marks are monochrome `currentColor`, so they would vanish
+   against a dark surface without this flip. */
+[data-theme='dark'] .btn-github .oauth-mark,
+[data-theme='dark'] .btn-apple .oauth-mark { color: var(--text); }
+.oauth-block .btn + .btn { margin-top: 0; }
 
 /* ── Two-factor sign-in step ──────────────────────────────────────────── */
 .tfa-form { animation: tfa-in .22s ease both; }

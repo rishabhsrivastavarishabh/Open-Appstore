@@ -13,6 +13,7 @@ import {
 // Bundled into the Worker, NOT fetched from a CDN at runtime: the enrolment page
 // used to degrade to "QR code unavailable offline" whenever that request failed.
 import QRCode from "qrcode";
+import { PROVIDERS, resolveProvider, enabledProviders, safeNext } from "../lib/oauth.js";
 
 const auth = new Hono();
 
@@ -239,13 +240,70 @@ auth.post("/auth/login", async (c) => {
  * browser. GoTrue redirects back to /auth/callback with the session in the URL
  * fragment, which the callback page reads and stores.
  */
-auth.get("/auth/google", (c) => {
-  const next = c.req.query("next") || "/developer";
-  const redirect = `${origin(c)}/auth/callback?next=${encodeURIComponent(next)}`;
+auth.get("/auth/google", (c) => startOAuth(c, "google"));
+
+/* ── Social sign-in, all providers ───────────────────────────────────────── */
+
+/**
+ * Build the GoTrue authorize redirect for any supported provider.
+ *
+ * The provider's client secret lives in Supabase, never here, so this Worker
+ * holds no OAuth credential for any provider.
+ */
+function startOAuth(c, name) {
+  const provider = resolveProvider(name);
+  if (!provider) {
+    // A wrong slug must not silently fall back to some other provider -- that
+    // would sign the user in with an identity they did not choose.
+    const supported = Object.keys(PROVIDERS).join(", ");
+    return c.json(
+      { success: false, error: `Unknown sign-in provider "${name}". Supported: ${supported}.` },
+      404
+    );
+  }
+  const next = safeNext(c.req.query("next"));
+  // Carry the provider through the round-trip purely so the callback page can
+  // name it ("Continuing your GitHub sign-in") instead of always saying Google.
+  const redirect =
+    `${origin(c)}/auth/callback?next=${encodeURIComponent(next)}` +
+    `&provider=${encodeURIComponent(provider.slug)}`;
   const url =
-    `${c.env.SUPABASE_URL}/auth/v1/authorize?provider=google` +
-    `&redirect_to=${encodeURIComponent(redirect)}`;
+    `${c.env.SUPABASE_URL}/auth/v1/authorize?provider=${encodeURIComponent(provider.slug)}` +
+    `&redirect_to=${encodeURIComponent(redirect)}` +
+    (provider.scope ? `&scopes=${encodeURIComponent(provider.scope)}` : "");
   return c.redirect(url, 302);
+}
+
+/** GET /api/auth/oauth/:provider — start sign-in with any provider. */
+auth.get("/auth/oauth/:provider", (c) => startOAuth(c, c.req.param("provider")));
+
+/**
+ * GET /api/auth/providers — which sign-in methods are live right now.
+ *
+ * The sign-in page uses this so it never renders a button that dead-ends in a
+ * GoTrue "provider is not enabled" error.
+ */
+auth.get("/auth/providers", async (c) => {
+  const enabled = await enabledProviders(c.env);
+  return c.json({
+    success: true,
+    data: {
+      enabled,
+      providers: enabled.map((slug) => {
+        const p = PROVIDERS[slug];
+        return {
+          provider: slug,
+          label: p.label,
+          scope: p.scope,
+          start_url: `/api/auth/oauth/${slug}`
+        };
+      }),
+      // Surfaced so a developer reading this can tell the difference between
+      // "not supported" and "supported but switched off in Supabase".
+      supported: Object.keys(PROVIDERS),
+      email_password: true
+    }
+  });
 });
 
 /** POST /api/auth/oauth/exchange — swap a PKCE ?code= for a session. */
@@ -260,9 +318,13 @@ auth.post("/auth/oauth/exchange", async (c) => {
   if (error) return c.json({ success: false, error }, status || 400);
   const session = sessionOf(data);
   if (!session) return c.json({ success: false, error: "No session returned" }, 400);
-  await logLogin(c, data?.user?.id, true, "google");
+  // Record which provider was actually used. This used to be hardcoded to
+  // "google", which would have quietly mislabelled every GitHub/Apple sign-in
+  // in the security audit log the moment a second provider went live.
+  const provider = data?.user?.app_metadata?.provider || "oauth";
+  await logLogin(c, data?.user?.id, true, provider);
   await rememberDevice(c, data?.user?.id);
-  return c.json({ success: true, session });
+  return c.json({ success: true, session, provider });
 });
 
 /* ── Two-factor authentication ───────────────────────────────────────────── */

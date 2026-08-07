@@ -861,9 +861,15 @@ function initTfa(next) {
   }
 }
 
-/* ---------------------- Google OAuth return handler --------------------- */
+/* ---------------------- Social OAuth return handler --------------------- */
+/** Display names for the providers Supabase can hand us back. */
+const PROVIDER_LABELS = {
+  google: 'Google', github: 'GitHub', facebook: 'Facebook',
+  azure: 'Microsoft', microsoft: 'Microsoft', apple: 'Apple'
+}
+
 /**
- * Lands here after Supabase finishes the Google handshake. Supabase either
+ * Lands here after Supabase finishes the provider handshake. Supabase either
  * drops tokens in the URL fragment (implicit) or a `?code=` we exchange
  * server-side (PKCE). Either way we store the session and move on.
  */
@@ -872,6 +878,9 @@ async function initAuthCallback() {
   const state = $('#callback-state')
   const alertBox = $('#callback-alert')
   const next = BOOT.next || '/developer'
+  // These messages used to say "Google" unconditionally, which would have lied
+  // to the user the moment a second provider was switched on.
+  const label = PROVIDER_LABELS[String(BOOT.provider || '').toLowerCase()] || 'your provider'
 
   const fail = (msg) => {
     if (state) {
@@ -912,23 +921,23 @@ async function initAuthCallback() {
     })
     history.replaceState(null, '', location.pathname + location.search)
     const me = await whoami(true)
-    if (!me) return fail('Signed in with Google, but the session was rejected. Try again.')
+    if (!me) return fail(`Signed in with ${label}, but the session was rejected. Try again.`)
     return done()
   }
 
   const code = query.get('code')
   if (code) {
-    if (note) note.textContent = 'Exchanging your Google authorization…'
+    if (note) note.textContent = `Exchanging your ${label} authorization…`
     const { ok, data } = await api('/api/auth/oauth/exchange', { method: 'POST', body: { code } })
     if (!ok || !data?.success || !data.session?.access_token) {
-      return fail(data?.error || 'Google sign-in could not be completed.')
+      return fail(data?.error || `${label} sign-in could not be completed.`)
     }
     Session.set(data.session)
     return done()
   }
 
   if (Session.token()) return done()
-  fail('No sign-in details came back from Google. Please start again.')
+  fail(`No sign-in details came back from ${label}. Please start again.`)
 }
 
 /* ==================== DEVELOPER CONSOLE ==================== */

@@ -1,6 +1,7 @@
 import { raw } from "hono/html";
 import { esc } from "./layout.js";
 import { CATEGORIES } from "../lib/types.js";
+import { PROVIDERS as OAUTH_PROVIDERS } from "../lib/oauth.js";
 const CAT_OPTIONS = (selected = "") => ["Other", ...CATEGORIES].map((c) => `<option value="${esc(c)}" ${selected === c ? "selected" : ""}>${esc(c)}</option>`).join("");
 /**
  * The publishing pipeline, rendered on every console page so a developer always
@@ -359,7 +360,52 @@ ${authGate("Developer sign-in required", "Sign in to create or edit your develop
 </div>
 `);
 }
-function authPage(mode) {
+/**
+ * Inline brand marks. These are SVG rather than Font Awesome glyphs because the
+ * sign-in page must render correctly on the very first paint, before any CDN
+ * stylesheet has loaded -- a sign-in button that is briefly invisible or
+ * unlabelled costs real conversions.
+ */
+const PROVIDER_ICONS = {
+  google: `<svg class="oauth-mark" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true">
+    <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.8-6.8C35.6 2.4 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.2l7.9 6.1C12.3 13.3 17.6 9.5 24 9.5z"/>
+    <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-2.8-.4-4.1H24v8.4h12.4c-.3 2.1-1.6 5.2-4.6 7.3l7.7 6c4.5-4.2 6.6-10.3 6.6-17.6z"/>
+    <path fill="#FBBC05" d="M10.4 28.7A14.5 14.5 0 0 1 9.6 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.5 10.8l7.9-6.1z"/>
+    <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.5-5.8l-7.7-6c-2.1 1.4-4.8 2.4-7.8 2.4-6.4 0-11.7-3.8-13.6-9.9l-7.9 6.1C6.4 42.6 14.6 48 24 48z"/>
+  </svg>`,
+  github: `<svg class="oauth-mark" viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.07-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.42 7.42 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A7.995 7.995 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>`,
+  facebook: `<svg class="oauth-mark" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#1877F2" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.95H15.83c-1.5 0-1.96.93-1.96 1.89v2.27h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z"/></svg>`,
+  azure: `<svg class="oauth-mark" viewBox="0 0 23 23" width="20" height="20" aria-hidden="true"><path fill="#F25022" d="M1 1h10v10H1z"/><path fill="#7FBA00" d="M12 1h10v10H12z"/><path fill="#00A4EF" d="M1 12h10v10H1z"/><path fill="#FFB900" d="M12 12h10v10H12z"/></svg>`,
+  apple: `<svg class="oauth-mark" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M17.05 12.54c.03 2.9 2.54 3.86 2.57 3.87-.02.06-.4 1.37-1.33 2.71-.8 1.16-1.63 2.32-2.94 2.34-1.29.03-1.7-.76-3.17-.76-1.47 0-1.93.74-3.15.79-1.26.04-2.22-1.24-3.03-2.4-1.65-2.38-2.91-6.73-1.22-9.67.84-1.46 2.35-2.39 3.98-2.41 1.24-.03 2.41.83 3.17.83.75 0 2.18-1.03 3.67-.88.62.03 2.38.23 3.5 1.72-.09.06-2.08 1.22-2.05 3.63M14.9 3.6c.67-.81 1.12-1.94.99-3.06-.99.04-2.19.66-2.88 1.47-.62.71-1.17 1.86-1.02 2.96 1.1.08 2.24-.56 2.91-1.37"/></svg>`
+};
+
+/**
+ * @param {string} mode - login | signup | reset
+ * @param {string[]} providers - enabled provider slugs, from GoTrue. Passed in
+ *   (not fetched here) so this view stays a pure function and the page remains
+ *   fully server-rendered on first paint.
+ */
+function oauthBlock(providers, mode) {
+  if (mode === "reset") return "";
+  const list = Array.isArray(providers) && providers.length ? providers : ["google"];
+  const buttons = list
+    .map((slug) => {
+      const p = OAUTH_PROVIDERS[slug];
+      if (!p) return "";
+      const icon = PROVIDER_ICONS[slug] || "";
+      const verb = mode === "signup" ? "Sign up" : "Continue";
+      return `<a class="btn ${p.className} btn-block btn-lg" id="oauth-${slug}" data-provider="${slug}" href="/api/auth/oauth/${slug}?next=%2Fdeveloper">
+        ${icon}<span>${verb} with ${esc(p.label)}</span>
+      </a>`;
+    })
+    .join("\n");
+  return `<div class="oauth-block">
+    ${buttons}
+    <div class="auth-divider"><span>or use your email</span></div>
+  </div>`;
+}
+
+function authPage(mode, providers) {
   const titles = {
     login: { h: "Welcome back", p: "Sign in to manage your apps and reviews." },
     signup: { h: "Create your account", p: "One account for browsing, reviewing and publishing apps." },
@@ -377,18 +423,7 @@ function authPage(mode) {
       <a href="/auth/signup" class="${mode === "signup" ? "is-active" : ""}">Sign up</a>
     </div>
 
-    ${mode !== "reset" ? `<div class="oauth-block">
-      <a class="btn btn-google btn-block btn-lg" id="google-signin" href="/api/auth/google?next=%2Fdeveloper">
-        <svg class="google-g" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true">
-          <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.8-6.8C35.6 2.4 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.2l7.9 6.1C12.3 13.3 17.6 9.5 24 9.5z"/>
-          <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-2.8-.4-4.1H24v8.4h12.4c-.3 2.1-1.6 5.2-4.6 7.3l7.7 6c4.5-4.2 6.6-10.3 6.6-17.6z"/>
-          <path fill="#FBBC05" d="M10.4 28.7A14.5 14.5 0 0 1 9.6 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.5 10.8l7.9-6.1z"/>
-          <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.5-5.8l-7.7-6c-2.1 1.4-4.8 2.4-7.8 2.4-6.4 0-11.7-3.8-13.6-9.9l-7.9 6.1C6.4 42.6 14.6 48 24 48z"/>
-        </svg>
-        Continue with Google
-      </a>
-      <div class="auth-divider"><span>or use your email</span></div>
-    </div>` : ""}
+    ${oauthBlock(providers, mode)}
 
     <form id="auth-form" class="auth-form" data-mode="${mode}">
       ${mode === "signup" ? `<label class="field"><span>Developer / display name</span><input name="developer_name" placeholder="Tech Studio" autocomplete="organization" /></label>` : ""}
@@ -659,6 +694,7 @@ function devDocsPage(origin) {
 
 <section class="section docs-layout">
   <nav class="docs-nav" aria-label="Docs sections">
+    <a href="#oauth">Social sign-in</a>
     <a href="#api-keys">API keys</a>
     <a href="#v1">Developer API v1</a>
     <a href="#v1-apps">Apps</a>
@@ -678,6 +714,43 @@ function devDocsPage(origin) {
   </nav>
 
   <div class="docs-body">
+    <div class="card" id="oauth">
+      <h2 class="card-title"><i class="fa-solid fa-fingerprint"></i> Social sign-in (OAuth&nbsp;2.0)</h2>
+      <p>Developers can sign in to this console with a social account instead of a password. The whole OAuth&nbsp;2.0 authorization-code flow (including PKCE) is handled by Supabase&nbsp;GoTrue, so <strong>no provider client secret is ever stored in this app</strong> &mdash; not in the Worker, not in the browser, not in an environment variable.</p>
+      <p class="form-note"><i class="fa-solid fa-circle-info"></i> If you are following a NextAuth.js guide: NextAuth cannot run here. This app is Hono on Cloudflare&nbsp;Pages, which has no Node runtime and no direct database connection. GoTrue is the equivalent, and it keeps the secrets out of our hands entirely.</p>
+
+      <h3>Start a sign-in</h3>
+      <pre class="code-block code-block-lg">GET /api/auth/oauth/{provider}?next=/developer</pre>
+      <p>Redirects (302) to the provider. After consent the user lands on <code>/auth/callback</code>, which stores the session and forwards to <code>next</code>.</p>
+      <p><code>next</code> must be a same-site path. Absolute and protocol-relative URLs are rejected and replaced with <code>/developer</code>, so the link cannot be used to bounce a freshly signed-in developer to another site.</p>
+
+      <h3>Which providers are live?</h3>
+      <pre class="code-block code-block-lg">GET /api/auth/providers</pre>
+      <p>The sign-in page calls this so it only renders buttons that actually work. A provider appears here only once it is switched on in Supabase.</p>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Provider</th><th><code>{provider}</code></th><th>Scopes requested</th></tr></thead>
+          <tbody>
+            <tr><td>Google</td><td><code>google</code></td><td><code>openid profile email</code></td></tr>
+            <tr><td>GitHub</td><td><code>github</code></td><td><code>user:email</code></td></tr>
+            <tr><td>Facebook</td><td><code>facebook</code></td><td><code>email public_profile</code></td></tr>
+            <tr><td>Microsoft</td><td><code>azure</code> <small>(<code>microsoft</code> also works)</small></td><td><code>openid profile email</code></td></tr>
+            <tr><td>Apple</td><td><code>apple</code></td><td><code>name email</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="form-note"><i class="fa-solid fa-shield-halved"></i> Minimal scopes only. GitHub is asked for <code>user:email</code> and deliberately <strong>not</strong> <code>repo</code> &mdash; we never read your repositories.</p>
+
+      <h3>Enabling another provider</h3>
+      <p>No code change is needed. Create the OAuth app with the provider, then in <strong>Supabase &rarr; Authentication &rarr; Providers</strong> paste the client&nbsp;ID and secret and switch it on. Set the provider&rsquo;s callback URL to Supabase&rsquo;s, <em>not</em> ours:</p>
+      <pre class="code-block code-block-lg">https://&lt;your-project&gt;.supabase.co/auth/v1/callback</pre>
+      <p>This is the single most common setup mistake: pointing the provider at <code>/auth/callback</code> on this site produces a <code>redirect_uri_mismatch</code>, because the provider must talk to GoTrue first. The button appears on the sign-in page within five minutes (provider list cache).</p>
+
+      <h3>Account linking</h3>
+      <p>Signing in with a provider that carries an email already registered here resolves to the <em>same</em> account rather than a duplicate, so a developer who signed up with a password can later use Google and keep their apps. Every sign-in is recorded with the provider that was used, visible under <a href="/developer/security">Security</a>.</p>
+    </div>
+
     <div class="card" id="api-keys">
       <h2 class="card-title"><i class="fa-solid fa-key"></i> API keys</h2>
       <p>The Developer API is authenticated with a personal API key, not a login session. Keys look like <code>dev_…</code> and never expire — revoke them instead.</p>
