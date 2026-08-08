@@ -2248,7 +2248,7 @@ async function initAiWidget() {
     if (!messages.length) {
       const hint = document.createElement('div')
       hint.className = 'ai-msg ai-msg-assistant ai-hint'
-      hint.textContent = 'Hi! Tell me what you need — for example "I need a photo editor" — and I will suggest apps from this store.'
+      hint.textContent = 'Hi, I\u2019m Sarath — your app guide for this store. Tell me what you need, for example "I need a photo editor", and I\u2019ll suggest apps from the catalogue.'
       log.appendChild(hint)
       return
     }

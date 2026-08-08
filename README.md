@@ -39,8 +39,9 @@ single lightweight edge application. Every page is real HTML on first paint — 
   automatic canonical URLs, Open Graph + Twitter cards, path-derived `noindex`, and JSON-LD
   (`WebSite`/`SearchAction`, `SoftwareApplication`, `ItemList`, `BreadcrumbList`) — see §8
 - Web manifest with `related_applications` pointing at `com.app.store`
-- **AI features on the storefront**: floating assistant widget on every page, natural-language app
-  search on `/apps`, AI app comparison on every listing, and personalised picks on the home page
+- **AI features on the storefront**: **Sarath**, the store's AI app guide — a floating widget on
+  every page, natural-language app search on `/apps`, AI app comparison on every listing, and
+  personalised picks on the home page
 
 ### Developer console
 - `/developer` dashboard with a 1‑2‑3 stepper that reflects real progress
@@ -141,13 +142,20 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 `GET/POST /api/developer/apps/:id/versions`, `GET/PUT /api/developer/profile`,
 `POST /api/developer/register`, `GET /api/developer/stats`.
 
-### AI assistant
+### Sarath — the AI assistant
+
+The assistant is named **Sarath** and introduces itself that way. The name is set in one place per
+surface: the widget chrome and ARIA labels in `src/views/layout.js`, the greeting in
+`public/static/app.js`, the on-page copy in `src/views/store.js`, and the two system prompts in
+`src/routes/api-ai.js`. The prompts also instruct the model never to claim to be human and never to
+claim to be a general-purpose assistant, so Sarath stays scoped to this catalogue.
+
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/ai` | `{ available, model, limit_per_hour, limit_per_minute, endpoints }` — public, so the UI can hide the feature when it is unconfigured |
 | GET | `/api/ai/context` | `{ apps, sample[], fields[] }` — how many catalogue apps the model is actually grounded on |
 | POST | `/api/ai/search` | `{ query }` → ranked `{ slug, name, reason }[]` — natural-language app search |
-| POST | `/api/ai/chat` | `{ messages[] }` → `{ reply }` — the floating widget; history comes from the client |
+| POST | `/api/ai/chat` | `{ messages[] }` → `{ reply }` — the Sarath widget; history comes from the client |
 | POST | `/api/ai/compare` | `{ a, b }` → `{ rows[], pros_a, cons_a, pros_b, cons_b, verdict }` |
 | POST | `/api/ai/picks` | `{ recent[], installed[], liked_categories[] }` → suggestions |
 | POST | `/api/ai/listing` 🔒 | `{ app_name, category?, notes? }` → `{ tagline, description, features[] }` |

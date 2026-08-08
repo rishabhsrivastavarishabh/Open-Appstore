@@ -67,7 +67,7 @@ function homePage(d) {
      client when there is no browsing history to personalise from, so a
      first-time visitor never sees an empty "recommended for you" heading. -->
 <section class="section" id="ai-picks" hidden>
-  ${sectionHead("Apps you might like", "Suggested by AI from the apps you have been viewing")}
+  ${sectionHead("Apps you might like", "Picked by Sarath from the apps you have been viewing")}
   <div id="ai-picks-out"></div>
 </section>
 
@@ -137,11 +137,11 @@ function browsePage(opts) {
   <form class="ai-search-form" id="ai-search-form" autocomplete="off">
     <div class="ai-search-label">
       <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
-      <label for="ai-search-input">Describe what you need and let AI find it</label>
+      <label for="ai-search-input">Describe what you need and let Sarath find it</label>
     </div>
     <div class="ai-search-row">
       <input id="ai-search-input" type="text" maxlength="500" placeholder="e.g. I need a photo editor that works offline" />
-      <button class="btn btn-primary" type="submit">Ask AI</button>
+      <button class="btn btn-primary" type="submit">Ask Sarath</button>
     </div>
   </form>
   <div id="ai-search-out" class="ai-search-out"></div>

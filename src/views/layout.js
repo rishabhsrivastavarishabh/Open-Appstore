@@ -287,24 +287,24 @@ ${o.body}
   )}
 </nav>
 
-<!-- Floating AI assistant. Rendered on every page from the layout so it is
+<!-- Sarath, the floating AI assistant. Rendered on every page from the layout so it is
      reachable from anywhere, per spec. The panel ships collapsed and inert:
      the hidden attribute keeps it out of the accessibility tree until opened,
      and no AI request is made until the visitor actually sends a message.
      (No backticks in this comment: it sits inside a template literal.) -->
 <div id="ai-widget" class="ai-widget" data-open="false">
-  <button id="ai-widget-toggle" class="ai-fab" type="button" aria-expanded="false" aria-controls="ai-widget-panel" aria-label="Open AI assistant">
+  <button id="ai-widget-toggle" class="ai-fab" type="button" aria-expanded="false" aria-controls="ai-widget-panel" aria-label="Open Sarath, the AI assistant">
     <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
   </button>
-  <section id="ai-widget-panel" class="ai-panel" role="dialog" aria-label="AI assistant" aria-modal="false" hidden>
+  <section id="ai-widget-panel" class="ai-panel" role="dialog" aria-label="Sarath, the AI assistant" aria-modal="false" hidden>
     <header class="ai-panel-head">
-      <span class="ai-panel-title"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Ask about apps</span>
-      <button id="ai-widget-close" class="icon-btn" type="button" aria-label="Close assistant"><i class="fa-solid fa-xmark"></i></button>
+      <span class="ai-panel-title"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Sarath <small class="ai-panel-sub">AI app guide</small></span>
+      <button id="ai-widget-close" class="icon-btn" type="button" aria-label="Close Sarath"><i class="fa-solid fa-xmark"></i></button>
     </header>
     <div id="ai-widget-log" class="ai-log" role="log" aria-live="polite" aria-atomic="false"></div>
     <form id="ai-widget-form" class="ai-panel-form" autocomplete="off">
       <label class="sr-only" for="ai-widget-input">Your message</label>
-      <input id="ai-widget-input" class="ai-panel-input" type="text" maxlength="500" placeholder="e.g. I need a photo editor" />
+      <input id="ai-widget-input" class="ai-panel-input" type="text" maxlength="500" placeholder="Ask Sarath… e.g. I need a photo editor" />
       <button class="btn btn-primary ai-panel-send" type="submit" aria-label="Send"><i class="fa-solid fa-paper-plane"></i></button>
     </form>
   </section>
