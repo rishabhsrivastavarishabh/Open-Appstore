@@ -45,7 +45,6 @@ import {
   devProfilePage,
   devSecurityPage,
   devApiKeysPage,
-  devAssistantPage,
   devDocsPage,
   authPage,
   authCallbackPage
@@ -616,18 +615,6 @@ app.get("/developer/docs", (c) => {
     })
   );
 });
-app.get(
-  "/developer/assistant",
-  (c) => c.html(
-    layout({
-      title: "AI Assistant",
-      mode: "developer",
-      active: "assistant",
-      body: devAssistantPage(),
-      bootstrap: { page: "dev-assistant" }
-    })
-  )
-);
 app.get(
   "/developer/api-keys",
   (c) => c.html(

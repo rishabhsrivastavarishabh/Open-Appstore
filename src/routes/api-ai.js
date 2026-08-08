@@ -24,7 +24,17 @@ const MODEL = "openai/gpt-4o-mini";
 
 /* Cap the app catalogue sent as context. Sending every app would blow the token
    budget and cost, and the assistant only needs enough to make a suggestion. */
-const MAX_CONTEXT_APPS = 60;
+/*
+ * Catalogue size vs detail-per-app.
+ *
+ * Each app now carries full listing detail rather than a one-line summary, so
+ * the per-app cost in tokens is several times higher. The app count is reduced
+ * to keep the total context (and therefore latency and per-request price)
+ * roughly where it was -- 40 fully-described apps is far more useful to the
+ * model than 60 it knows almost nothing about.
+ */
+const MAX_CONTEXT_APPS = 40;
+const MAX_DESC_CHARS = 420;
 const MAX_PROMPT_CHARS = 500;
 
 /**
@@ -62,28 +72,64 @@ function fail(c, status, message, code) {
 }
 
 /**
- * Trim the catalogue to the few fields the model actually needs to reason.
+ * Project an `apps` row into the object the model sees.
  *
- * Column names are the REAL ones on `apps` (`rating`, `total_downloads`, and no
- * `tagline` column at all -- the first line of `description` stands in for one).
- * An earlier version of this file guessed `rating_average` / `download_count` /
- * `tagline`; PostgREST answered `column apps.tagline does not exist`, so
- * `catalogue()` returned an error object instead of rows and every AI reply was
- * generated with NO catalogue context. It still produced fluent answers, which
- * is exactly why that slipped through -- so `/api/ai/context` below now exposes
- * the app count for tests to assert on.
+ * This carries the FULL detail of a listing, not a teaser: version numbers,
+ * requirements, developer, links, review counts and update policy. The model
+ * can only answer questions about facts it was given, so anything a visitor
+ * might reasonably ask ("what version is it?", "does it need Android 8?",
+ * "who made it?", "is there a privacy policy?") has to be in here.
+ *
+ * Column names are the REAL ones on `apps`. An earlier version guessed
+ * `tagline` / `rating_average` / `download_count`; PostgREST answered
+ * `column apps.tagline does not exist`, catalogue() returned an error object,
+ * and every AI reply was generated with NO catalogue context while still
+ * sounding fluent. Any field added here MUST exist in APP_SELECT.
+ *
+ * Empty values are stripped rather than sent as null. "min_android": null
+ * invites the model to state the requirement is "not specified" as though that
+ * were a finding; an absent key just leaves nothing to say.
  */
 function slimApp(a) {
-  const desc = String(a.description || "").replace(/\s+/g, " ").trim();
-  return {
+  // Markdown is flattened: the model reads prose, and stray #/*/` tokens waste
+  // context and occasionally leak into its output.
+  const desc = String(a.description || "")
+    .replace(/[#*_`>|]/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  const out = {
     slug: a.app_slug,
     name: a.app_name,
-    category: a.category,
-    summary: desc.slice(0, 160),
-    rating: a.rating,
-    downloads: a.total_downloads,
-    price: a.is_free ? "Free" : String(a.price ?? "")
+    category: a.category || "Other",
+    // Generous but bounded: enough for the model to actually understand what
+    // the app does, short of pasting an entire README per app.
+    description: desc.slice(0, MAX_DESC_CHARS),
+    price: a.is_free === false ? `${Number(a.price || 0)}` : "Free",
+    is_free: a.is_free !== false,
+    version: a.latest_version || a.current_version || null,
+    min_android: a.min_version || null,
+    rating: Number(a.rating || 0) || null,
+    reviews: Number(a.total_reviews || 0) || null,
+    downloads: Number(a.total_downloads || 0) || null,
+    developer: a.developers?.developer_name || null,
+    developer_verified: a.developers?.verified === true ? true : null,
+    website: a.website || a.website_link || null,
+    has_privacy_policy: a.privacy_policy_link ? true : null,
+    // Whether a download is actually obtainable: the model should not promise
+    // an install for a listing with no link.
+    downloadable: a.download_url || a.google_drive_link ? true : null,
+    auto_update: a.auto_update === false ? false : null,
+    updated: a.updated_at ? String(a.updated_at).slice(0, 10) : null,
+    published: a.created_at ? String(a.created_at).slice(0, 10) : null
   };
+  const changes = String(a.change_log || "").replace(/\s+/g, " ").trim();
+  if (changes) out.latest_changes = changes.slice(0, 200);
+  // Drop empty keys so the model is never handed a field with nothing in it.
+  Object.keys(out).forEach((k) => {
+    if (out[k] === null || out[k] === "" || out[k] === undefined) delete out[k];
+  });
+  return out;
 }
 
 /**
@@ -262,12 +308,26 @@ async function visitorGate(c) {
 }
 
 /** Load a compact published-app catalogue to ground the model in real data. */
+/*
+ * Columns pulled for AI context. Every name here is verified against the real
+ * `apps` table (see APP_SELECT in lib/types.js) -- a typo makes PostgREST fail
+ * the whole query, which used to leave the model answering with no grounding.
+ *
+ * `developers(...)` is a PostgREST embedded resource over the developer_id
+ * foreign key: it fetches the studio name in the SAME round trip, so the model
+ * can answer "who made this?" without a second query per app.
+ */
+const CATALOGUE_SELECT =
+  "select=app_slug,app_name,category,description,rating,total_reviews,total_downloads," +
+  "is_free,price,current_version,latest_version,min_version,change_log,auto_update," +
+  "website,website_link,privacy_policy_link,download_url,google_drive_link," +
+  "created_at,updated_at,developers(developer_name,verified)";
+
 async function catalogue(env) {
   const { data, error } = await sbSelect(
     env,
     "apps",
-    "select=app_slug,app_name,category,description,rating,total_downloads,is_free,price" +
-      `&status=eq.published&order=total_downloads.desc&limit=${MAX_CONTEXT_APPS}`
+    `${CATALOGUE_SELECT}&status=eq.published&order=total_downloads.desc&limit=${MAX_CONTEXT_APPS}`
   );
   // A failed query must not masquerade as an empty catalogue: returning [] here
   // would let the model answer confidently with no grounding at all.

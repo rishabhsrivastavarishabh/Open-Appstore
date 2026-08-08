@@ -16,7 +16,6 @@ const NAV_DEV = [
   { href: "/developer/apps", label: "My Apps", icon: "fa-cubes", key: "myapps" },
   { href: "/developer/submit", label: "Submit App", icon: "fa-cloud-arrow-up", key: "submit" },
   { href: "/developer/profile", label: "Profile", icon: "fa-id-badge", key: "profile" },
-  { href: "/developer/assistant", label: "AI Assistant", icon: "fa-wand-magic-sparkles", key: "assistant" },
   { href: "/developer/api-keys", label: "API Keys", icon: "fa-key", key: "apikeys" },
   { href: "/developer/security", label: "Security", icon: "fa-shield-halved", key: "security" },
   { href: "/developer/docs", label: "API Docs", icon: "fa-book", key: "docs" }

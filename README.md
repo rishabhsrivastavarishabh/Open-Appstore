@@ -35,8 +35,12 @@ single lightweight edge application. Every page is real HTML on first paint — 
 - `/search`, `/legal/privacy`, `/legal/terms`, `/about`
 - **Store ⇄ Developer mode switch** in the header on every page
 - Dark/light theme with persistence, toasts, skeletons, share sheet
-- `sitemap.xml` (with `<image:image>` entries) and `robots.txt`
+- **Full Search Console SEO**: generated `sitemap.xml` (with `<image:image>`) + `robots.txt`,
+  automatic canonical URLs, Open Graph + Twitter cards, path-derived `noindex`, and JSON-LD
+  (`WebSite`/`SearchAction`, `SoftwareApplication`, `ItemList`, `BreadcrumbList`) — see §8
 - Web manifest with `related_applications` pointing at `com.app.store`
+- **AI features on the storefront**: floating assistant widget on every page, natural-language app
+  search on `/apps`, AI app comparison on every listing, and personalised picks on the home page
 
 ### Developer console
 - `/developer` dashboard with a 1‑2‑3 stepper that reflects real progress
@@ -140,20 +144,60 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 ### AI assistant
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/api/ai` | `{ available, model, limit_per_hour, endpoints }` — public, so the UI can hide the feature when it is unconfigured |
+| GET | `/api/ai` | `{ available, model, limit_per_hour, limit_per_minute, endpoints }` — public, so the UI can hide the feature when it is unconfigured |
+| GET | `/api/ai/context` | `{ apps, sample[], fields[] }` — how many catalogue apps the model is actually grounded on |
+| POST | `/api/ai/search` | `{ query }` → ranked `{ slug, name, reason }[]` — natural-language app search |
+| POST | `/api/ai/chat` | `{ messages[] }` → `{ reply }` — the floating widget; history comes from the client |
+| POST | `/api/ai/compare` | `{ a, b }` → `{ rows[], pros_a, cons_a, pros_b, cons_b, verdict }` |
+| POST | `/api/ai/picks` | `{ recent[], installed[], liked_categories[] }` → suggestions |
 | POST | `/api/ai/listing` 🔒 | `{ app_name, category?, notes? }` → `{ tagline, description, features[] }` |
 | POST | `/api/ai/ask` 🔒 | `{ prompt }` → an answer grounded on the published catalogue |
 
 Backed by **OpenRouter** (`openai/gpt-4o-mini`) through a server-side proxy.
 
+**Where it appears in the UI**
+- Floating widget, bottom-right, on **every** page (`/api/ai/chat`).
+- Natural-language search on `/apps` (`/api/ai/search`).
+- "Compare with another app" on every app page (`/api/ai/compare`).
+- "Apps you might like" on the home page (`/api/ai/picks`), driven by recently-viewed slugs in
+  `localStorage`. The section **removes itself** when there is no history, so a first-time visitor
+  never sees an empty "recommended for you" heading.
+
+There is **no `/developer/assistant` page**. The two 🔒 developer endpoints remain part of the API
+surface, but the console page that wrapped them was removed — the storefront widget covers the same
+ground from anywhere in the app.
+
+**Grounding**
+- The model is given the **full detail** of up to `MAX_CONTEXT_APPS` (40) published listings:
+  description, version, minimum Android, developer (+verified flag), rating, review count,
+  downloads, price, website, whether a privacy policy and a download link exist, and the latest
+  changelog. That is what lets it answer "what version is RailHop and who made it?" rather than only
+  "what should I install?".
+- Empty fields are **stripped** rather than sent as `null`: a `null` invites the model to report
+  "not specified" as if that were a finding.
+- `CATALOGUE_SELECT` column names are verified against the real `apps` table. This matters: an
+  earlier version selected `tagline` / `rating_average` / `download_count`, none of which exist.
+  PostgREST failed the whole query, `catalogue()` returned an error object, and **every AI answer
+  was generated with zero catalogue context while still sounding completely fluent.** The test only
+  asserted "answer is non-empty", so it passed. `GET /api/ai/context` now exposes the app count so
+  the grounding is assertable, and a failed query can no longer masquerade as an empty catalogue.
+- Model-returned slugs are resolved against the real catalogue (`hydrate()`); an invented app has no
+  match and is dropped before it reaches the UI.
+
+**Cost and abuse controls**
 - The API key lives **only** in the `OPENROUTER_API_KEY` secret. It is never imported into any
   browser bundle — verified with `grep -c "sk-or-v1" dist/_worker.js public/static/app.js` → `0 0`.
 - A pinned model is used rather than `openrouter/auto`, because `auto` is free to route a request
   to a far more expensive model while the account owner pays for it.
-- **Sign-in is required** even though nothing here is private: every call spends real credit, so an
-  anonymous endpoint would let a stranger drain the balance.
-- AI calls get their own `ai` rate-limit tier of **20/hour per user**, far tighter than the
-  1000/hour data tier, for the same reason.
+- Two gates: **20/hour** (tier `ai`) plus a **3/minute burst cap**. The burst check runs *before*
+  the hourly bucket is charged, so being told to slow down does not cost a call.
+- Storefront endpoints work **signed out** (the widget has to), keyed by user id or
+  `CF-Connecting-IP` — set by the edge, so a client cannot forge it. A large NAT shares one budget;
+  that is a deliberate trade. The 🔒 developer endpoints still require sign-in.
+- **Input is validated before the limiter is charged.** Validation costs no AI call, so an empty
+  textbox must not burn a slot of a 3/minute budget.
+- Responses are cached for 10 minutes keyed on the request shape, so two visitors asking the same
+  question cost one API call.
 
 ---
 
@@ -301,6 +345,45 @@ supported method below instead — both keep the token in a secret, out of git:
 | **HTML tag** (recommended) | Search Console → *HTML tag*, copy the `content="…"` value → set `GOOGLE_SITE_VERIFICATION` → redeploy. Middleware injects the `<meta>` on **every** page, so any URL of the property verifies and a newly added page can never ship unverified. |
 | **HTML file** | Search Console → *HTML file*, note the `google<token>.html` filename → set `GOOGLE_SITE_VERIFICATION_FILE` to that exact filename → redeploy. Only the configured filename responds; every other `google*.html` 404s, so the endpoint cannot confirm a guessed token. |
 
+The token currently configured is verified live on every deploy:
+
+```bash
+curl -s https://openappstore.pages.dev/ | grep -o '<meta name="google-site-verification"[^>]*>'
+```
+
+### Search Console SEO
+
+Everything a crawler needs is generated server-side; nothing depends on JavaScript running.
+
+| Surface | Where | Notes |
+| --- | --- | --- |
+| `robots.txt` | `GET /robots.txt` | Generated, so the `Sitemap:` line always carries the *current* origin — a hardcoded one would point preview deploys at production. Disallows `/api/`, `/auth/`, `/developer`. |
+| `sitemap.xml` | `GET /sitemap.xml` | Generated live from Supabase: static routes + every published app + categories that actually have apps + developer profiles. App entries carry `<image:image>` for the icon. A newly published app is discoverable on the next crawl with no rebuild. |
+| Canonical | every page | Derived from the request URL by middleware, not passed per route — 22 call sites means the one page someone forgets would ship without a canonical. |
+| Open Graph | every page | `og:title`, `og:description`, `og:type`, `og:url`, `og:site_name`, `og:locale`, `og:image` (+ `:alt`). App pages use `og:type=product`. |
+| Twitter | every page | `summary_large_image` card with title, description, image and alt. |
+| `robots` meta | every page | `index, follow, max-image-preview:large` on public pages; `noindex, follow` on `/developer*`, `/auth*`, search-result URLs and 404s. |
+| JSON-LD | per page type | `WebSite` + `SearchAction` + `Organization` (home), `SoftwareApplication` + `Offer` + `AggregateRating` (app pages), `ItemList` (listings), `BreadcrumbList`, `CollectionPage`, `WebPage`. |
+
+Decisions worth knowing:
+
+- **Only `?category=` survives into the canonical URL.** Category pages are listed in the sitemap, so
+  stripping the param would make all of them canonicalise to `/apps` — Search Console would then
+  report "Alternate page with proper canonical tag" and index **none** of them. `sort`, `price` and
+  `search` only reorder the same set, so those *do* collapse to the bare path, which is what stops a
+  dozen near-duplicates competing with each other. `?category=All` is the default, so it collapses too.
+- **`noindex` is derived from the path**, not passed per route, so a new private page is noindex by
+  default. `robots.txt` alone is not enough: a disallowed URL can still be indexed without a snippet
+  if something links to it, because the crawler never fetches the page to see the directive.
+- **`aggregateRating` is omitted when an app has no reviews.** Google penalises a rating with no
+  `reviewCount`, and inventing one would misrepresent the app.
+- **Empty categories are left out of the sitemap.** A URL that renders no results is a soft-404 and
+  drags down the crawl quality of everything around it.
+- The last breadcrumb has no `item` — per schema.org, since it would only link to itself.
+
+Verified by `82` assertions covering the token, robots, sitemap validity, JSON-LD parsing, canonical
+behaviour, `noindex` placement and description uniqueness.
+
 ### Custom domain
 
 `openappstore.openflip.in` is the intended domain. The `openflip.in` zone exists in the Cloudflare
@@ -330,6 +413,11 @@ Cloudflare Worker, so DNS for the subdomain has to point at Cloudflare Pages.
 - The redesign prompts (home-page gradient restyle, app-details restyle, `/app/{slug}` URL
   restructure, email-OTP signup flow) are **not** built. Note the OTP flow conflicts with the
   earlier deliberate removal of email-OTP login, so it needs a decision before implementation.
+- Auth UI polish from the last spec (full-name field, password-strength meter, confirm-password,
+  separate Terms + Privacy checkboxes, "remember me", show/hide toggles) is **not** built.
+- Route aliases `/auth/signin` and `/auth/forgot-password` do not exist — the live paths are
+  `/auth/login` and `/auth/reset`. `/auth/verify-otp` and `/auth/reset-password` also 404, pending
+  the OTP decision above.
 
 - User-facing library page for `user_installed_apps` (data is seeded, UI pending)
 - In-app notifications UI (`notifications` table unused)
