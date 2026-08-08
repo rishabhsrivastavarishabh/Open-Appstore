@@ -1591,3 +1591,14 @@ input:focus, select:focus, textarea:focus {
   word-break: break-all;
   user-select: all;
 }
+
+/* ── AI assistant output ──────────────────────────────────────────────── */
+.ai-out { margin-top: 1rem; padding: 1rem 1.1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.ai-field + .ai-field { margin-top: .9rem; }
+.ai-field h4 { margin: 0 0 .3rem; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); }
+.ai-field p { margin: 0; white-space: pre-wrap; }
+.ai-field ul { margin: .3rem 0 0; padding-left: 1.2rem; }
+/* pre-wrap so model paragraph breaks survive instead of collapsing */
+.ai-answer { white-space: pre-wrap; line-height: 1.6; }
+.ai-busy { margin: 0; color: var(--text-2); }
+.ai-error { margin: 0; color: var(--danger, #dc2626); }

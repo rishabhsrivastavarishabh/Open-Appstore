@@ -15,10 +15,24 @@ const NAV_DEV = [
   { href: "/developer/apps", label: "My Apps", icon: "fa-cubes", key: "myapps" },
   { href: "/developer/submit", label: "Submit App", icon: "fa-cloud-arrow-up", key: "submit" },
   { href: "/developer/profile", label: "Profile", icon: "fa-id-badge", key: "profile" },
+  { href: "/developer/assistant", label: "AI Assistant", icon: "fa-wand-magic-sparkles", key: "assistant" },
   { href: "/developer/api-keys", label: "API Keys", icon: "fa-key", key: "apikeys" },
   { href: "/developer/security", label: "Security", icon: "fa-shield-halved", key: "security" },
   { href: "/developer/docs", label: "API Docs", icon: "fa-book", key: "docs" }
 ];
+/*
+ * Google Search Console verification token.
+ *
+ * Held module-side and set once per request by middleware rather than threaded
+ * through all 21 layout() call sites: a token present on EVERY page means any
+ * URL of the property can be verified, and a newly added page can never ship
+ * unverified by accident. Read from the environment so it is not committed.
+ */
+let SITE_VERIFICATION = "";
+function setSiteVerification(token) {
+  SITE_VERIFICATION = typeof token === "string" ? token.trim() : "";
+}
+
 function layout(o) {
   const mode = o.mode || "store";
   const nav = mode === "developer" ? NAV_DEV : NAV_STORE;
@@ -31,6 +45,7 @@ function layout(o) {
 <meta name="theme-color" content="#0b1020" />
 <title>${o.title} · ${SITE_NAME}</title>
 <meta name="description" content="${desc}" />
+${SITE_VERIFICATION ? raw(`<meta name="google-site-verification" content="${esc(SITE_VERIFICATION)}" />`) : ""}
 <meta property="og:title" content="${o.title} · ${SITE_NAME}" />
 <meta property="og:description" content="${desc}" />
 <meta property="og:type" content="website" />
@@ -180,5 +195,6 @@ ${raw((o.scripts || []).map((s) => `<script src="${esc(s)}" type="module"></scri
 export {
   SITE_NAME,
   esc,
-  layout
+  layout,
+  setSiteVerification
 };

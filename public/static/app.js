@@ -940,6 +940,78 @@ async function initAuthCallback() {
   fail(`No sign-in details came back from ${label}. Please start again.`)
 }
 
+
+/* ------------------------- AI assistant (developer) ---------------------- */
+async function initDevAssistant() {
+  if (!(await devGate())) return
+
+  const unavailable = $('#ai-unavailable')
+  const listingCard = $('#ai-listing-card')
+  const askCard = $('#ai-ask-card')
+
+  // Ask the server whether the key is configured before showing tools that
+  // would only fail. A dead button is worse than a clear "offline" notice.
+  const probe = await api('/api/ai')
+  if (!probe.ok || !probe.data?.data?.available) {
+    if (unavailable) unavailable.hidden = false
+    if (listingCard) listingCard.hidden = true
+    if (askCard) askCard.hidden = true
+    return
+  }
+
+  const render = (box, markup) => { if (box) { box.hidden = false; box.innerHTML = markup } }
+  const busy = (box, msg) => render(box, `<p class="ai-busy"><i class="fa-solid fa-spinner fa-spin"></i> ${escHtml(msg)}</p>`)
+  const oops = (box, msg) => render(box, `<p class="ai-error"><i class="fa-solid fa-circle-exclamation"></i> ${escHtml(msg)}</p>`)
+
+  /* Listing writer */
+  const lf = $('#ai-listing-form')
+  const lout = $('#ai-listing-out')
+  if (lf) lf.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const fd = new FormData(lf)
+    const payload = {
+      app_name: String(fd.get('app_name') || '').trim(),
+      category: String(fd.get('category') || '').trim(),
+      notes: String(fd.get('notes') || '').trim()
+    }
+    if (!payload.app_name) return oops(lout, 'Enter an app name first.')
+    busy(lout, 'Drafting your listing…')
+    const { ok, data } = await api('/api/ai/listing', { method: 'POST', body: payload })
+    if (!ok || !data?.success) return oops(lout, data?.error || 'Could not generate a draft.')
+    const d = data.data
+    const feats = (d.features || []).map(f => `<li>${escHtml(f)}</li>`).join('')
+    render(lout, `
+      <div class="ai-field"><h4>Tagline</h4><p id="ai-tagline">${escHtml(d.tagline || '\u2014')}</p></div>
+      <div class="ai-field"><h4>Description</h4><p id="ai-desc">${escHtml(d.description || '\u2014')}</p></div>
+      ${feats ? `<div class="ai-field"><h4>Features</h4><ul>${feats}</ul></div>` : ''}
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" id="ai-copy"><i class="fa-solid fa-copy"></i> Copy all</button>
+      </div>
+      <p class="form-note"><i class="fa-solid fa-circle-info"></i> Read it before publishing \u2014 AI drafts can overstate what an app does.</p>`)
+    const copyBtn = $('#ai-copy')
+    if (copyBtn) copyBtn.addEventListener('click', async () => {
+      const lines = [d.tagline, '', d.description, ''].concat((d.features || []).map(f => '- ' + f))
+      try {
+        await navigator.clipboard.writeText(lines.join('\n'))
+        toast('Draft copied')
+      } catch { toast('Could not copy \u2014 select the text manually', 'error') }
+    })
+  })
+
+  /* Free-form question */
+  const af = $('#ai-ask-form')
+  const aout = $('#ai-ask-out')
+  if (af) af.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const prompt = String(new FormData(af).get('prompt') || '').trim()
+    if (!prompt) return oops(aout, 'Type a question first.')
+    busy(aout, 'Thinking…')
+    const { ok, data } = await api('/api/ai/ask', { method: 'POST', body: { prompt } })
+    if (!ok || !data?.success) return oops(aout, data?.error || 'The assistant could not answer.')
+    render(aout, `<div class="ai-answer">${escHtml(data.data.answer).split('\n').join('<br>')}</div>`)
+  })
+}
+
 /* ==================== DEVELOPER CONSOLE ==================== */
 
 /** Resolve auth for a console page. Returns `me` or null (gate shown). */
@@ -2167,6 +2239,9 @@ function boot() {
       break
     case 'dev-security':
       initDevSecurity()
+      break
+    case 'dev-assistant':
+      initDevAssistant()
       break
     case 'dev-api-keys':
       initDevApiKeys()

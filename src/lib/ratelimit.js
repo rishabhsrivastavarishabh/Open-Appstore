@@ -17,7 +17,10 @@
 /** tier -> requests per hour, matching the published documentation. */
 export const TIERS = {
   free: 1000,
-  verified: 5000
+  verified: 5000,
+  // AI calls cost real money per request, so they get their own much tighter
+  // tier rather than sharing the data-API budget.
+  ai: 20
 };
 
 const WINDOW_MS = 60 * 60 * 1000; // 1 hour, fixed window

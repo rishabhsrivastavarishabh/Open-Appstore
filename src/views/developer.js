@@ -609,6 +609,60 @@ function authCallbackPage() {
 }
 
 /** /developer/api-keys — mint, list and revoke keys for the /api/v1 surface. */
+/**
+ * AI assistant page.
+ *
+ * Two tools rather than a generic chat box, because a blank chat prompt gives a
+ * developer no idea what the thing is for. The listing writer is first: a weak
+ * description is the most common reason a decent app gets no installs.
+ */
+function devAssistantPage() {
+  return raw(`
+<section class="dev-head">
+  <div class="dev-head-inner">
+    <div>
+      <p class="dev-eyebrow"><i class="fa-solid fa-wand-magic-sparkles"></i> Developer Console</p>
+      <h1>AI Assistant</h1>
+      <p>Draft your store listing, or ask anything about publishing and the catalogue.</p>
+    </div>
+  </div>
+</section>
+
+<div class="dev-grid">
+  <div class="card" id="ai-unavailable" hidden>
+    <h2 class="card-title"><i class="fa-solid fa-plug-circle-xmark"></i> Assistant offline</h2>
+    <p>The AI assistant is not configured on this deployment. Everything else in the console works normally.</p>
+  </div>
+
+  <div class="card" id="ai-listing-card">
+    <h2 class="card-title"><i class="fa-solid fa-pen-fancy"></i> Write my listing</h2>
+    <p>Give the basics and get a tagline, description and feature list you can paste into <a href="/developer/submit">Submit App</a>.</p>
+    <form id="ai-listing-form" class="form-grid">
+      <label class="field"><span>App name *</span><input name="app_name" required placeholder="Quick Notes" /></label>
+      <label class="field"><span>Category</span>${"" /* reuse the store category list */}<select name="category">${CAT_OPTIONS()}</select></label>
+      <label class="field field-full"><span>What does it do? <small>a few words is enough</small></span>
+        <textarea name="notes" rows="3" placeholder="Offline note taking, markdown support, syncs to Drive"></textarea></label>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit"><i class="fa-solid fa-wand-magic-sparkles"></i> Generate draft</button>
+      </div>
+    </form>
+    <div id="ai-listing-out" class="ai-out" hidden></div>
+  </div>
+
+  <div class="card" id="ai-ask-card">
+    <h2 class="card-title"><i class="fa-solid fa-comments"></i> Ask a question</h2>
+    <p>Grounded in this store's real published catalogue, so recommendations point at apps that actually exist.</p>
+    <form id="ai-ask-form" class="form-row-inline">
+      <label class="field"><span>Your question</span>
+        <input name="prompt" required maxlength="500" placeholder="Which categories are underserved right now?" /></label>
+      <button class="btn btn-primary" type="submit"><i class="fa-solid fa-paper-plane"></i> Ask</button>
+    </form>
+    <div id="ai-ask-out" class="ai-out" hidden></div>
+    <p class="form-note"><i class="fa-solid fa-gauge-high"></i> 20 AI requests per hour per account.</p>
+  </div>
+</div>`);
+}
+
 function devApiKeysPage() {
   return raw(`
 <section class="dev-head">
@@ -1077,6 +1131,7 @@ export {
   authCallbackPage,
   authPage,
   devApiKeysPage,
+  devAssistantPage,
   devAppsPage,
   devDashboardPage,
   devDocsPage,

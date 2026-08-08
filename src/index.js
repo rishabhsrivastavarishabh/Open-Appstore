@@ -5,6 +5,7 @@ import apiApps from "./routes/api-apps.js";
 import apiAuth from "./routes/api-auth.js";
 import apiDeveloper from "./routes/api-developer.js";
 import apiV1 from "./routes/api-v1.js";
+import apiAi from "./routes/api-ai.js";
 import { sbSelect } from "./lib/supabase.js";
 import { normalizeImageUrl } from "./lib/media.js";
 import {
@@ -15,7 +16,7 @@ import {
   CATEGORIES,
   toAppView
 } from "./lib/types.js";
-import { layout, esc } from "./views/layout.js";
+import { layout, esc, setSiteVerification } from "./views/layout.js";
 import { notFoundArt } from "./views/components.js";
 import {
   homePage,
@@ -34,6 +35,7 @@ import {
   devProfilePage,
   devSecurityPage,
   devApiKeysPage,
+  devAssistantPage,
   devDocsPage,
   authPage,
   authCallbackPage
@@ -43,11 +45,36 @@ import { enabledProviders } from "./lib/oauth.js";
 /** Android application id of the companion Open Appstore client. */
 const PACKAGE_NAME = "com.app.store";
 const app = new Hono();
+// Publish the Search Console token into the view layer once per request.
+// Bindings only exist inside a request in Workers, so this cannot be done at
+// module scope.
+app.use("*", async (c, next) => {
+  setSiteVerification(c.env.GOOGLE_SITE_VERIFICATION || "");
+  await next();
+});
+
+/**
+ * Search Console's HTML-file verification method.
+ *
+ * Google asks you to host googleXXXX.html containing one line of text. Served
+ * from a route rather than a static file so the token stays in an environment
+ * variable instead of being committed to the repo. Only responds when the
+ * requested filename matches the configured token, so it cannot be used to
+ * confirm arbitrary guesses.
+ */
+app.get("/google:token{[A-Za-z0-9_-]+\\.html}", (c) => {
+  const configured = String(c.env.GOOGLE_SITE_VERIFICATION_FILE || "").trim();
+  const asked = `google${c.req.param("token")}`;
+  if (!configured || asked !== configured) return c.notFound();
+  return c.text(`google-site-verification: ${configured}`);
+});
+
 app.use("/api/*", cors());
 // The versioned developer API is mounted first: it owns every path under
 // /api/v1 (including its own JSON 404 fallback), so it must match before the
 // unversioned routers get a chance to.
 app.route("/api/v1", apiV1);
+app.route("/api", apiAi);
 app.route("/api", apiApps);
 app.route("/api", apiAuth);
 app.route("/api", apiDeveloper);
@@ -478,6 +505,18 @@ app.get("/developer/docs", (c) => {
     })
   );
 });
+app.get(
+  "/developer/assistant",
+  (c) => c.html(
+    layout({
+      title: "AI Assistant",
+      mode: "developer",
+      active: "assistant",
+      body: devAssistantPage(),
+      bootstrap: { page: "dev-assistant" }
+    })
+  )
+);
 app.get(
   "/developer/api-keys",
   (c) => c.html(
