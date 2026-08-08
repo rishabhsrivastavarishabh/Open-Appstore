@@ -108,7 +108,7 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 | GET | `/api/apps/:id/versions` | release history |
 | POST | `/api/apps/:id/download` | records the download, returns the resolved URL |
 | GET | `/api/apps/:id/reviews`, POST 🔒 | list / create a review |
-| GET | `/api/categories`, `/api/developers`, `/api/stats`, `/api/health` | |
+| GET | `/api/categories`, `/api/developers`, `/api/apps/stats`, `/api/health` | |
 
 ### Auth
 | Method | Path | Notes |
