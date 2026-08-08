@@ -2197,6 +2197,392 @@ async function initDevApiKeys() {
   await load()
 }
 
+/* --------------------------- AI: shared plumbing ------------------------ */
+/**
+ * AI availability is probed ONCE per page and shared by every AI feature.
+ * Without this each feature would fire its own /api/ai request on load, and the
+ * widget would flash into view on deployments where AI is not configured.
+ */
+let AI_STATUS = null
+async function aiStatus() {
+  if (AI_STATUS) return AI_STATUS
+  const { ok, data } = await api('/api/ai')
+  AI_STATUS = ok && data?.success ? data.data : { available: false }
+  return AI_STATUS
+}
+
+/**
+ * Turn an AI error response into something a person can act on.
+ * A 429 already carries a human message from the server; anything else gets a
+ * generic line, because upstream errors are not the visitor's fault or problem.
+ */
+function aiErrorText(status, data) {
+  if (data && typeof data.error === 'string' && data.error) return data.error
+  if (status === 0) return 'Network error — check your connection.'
+  return 'The assistant is unavailable right now. Please try again.'
+}
+
+/* --------------------- AI: recently viewed (local only) ----------------- */
+/**
+ * Track recently viewed app slugs in localStorage to feed "Apps You Might Like".
+ *
+ * Deliberately client-side: it is a browsing signal, not account data, so it
+ * needs no table, works for signed-out visitors, and never leaves the device
+ * except as slugs sent with an explicit recommendation request.
+ */
+const RECENT_KEY = 'oas.recent'
+const RECENT_MAX = 12
+
+function recentGet() {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]')
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, RECENT_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+function recentPush(slug) {
+  if (!slug) return
+  try {
+    const list = recentGet().filter((s) => s !== slug)
+    list.unshift(slug)
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX)))
+  } catch {
+    /* storage disabled or full — recommendations simply stay less personal */
+  }
+}
+
+/* ------------------------- AI: floating chat widget --------------------- */
+/**
+ * The bottom-right assistant, available on every page.
+ *
+ * Chat history lives in sessionStorage: it survives navigation between pages
+ * (so the conversation is not lost when the visitor opens an app) but is gone
+ * when the tab closes, which matches "chat history in session" and means no
+ * conversation is ever persisted server-side.
+ */
+const CHAT_KEY = 'oas.chat'
+
+function chatLoad() {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(CHAT_KEY) || '[]')
+    return Array.isArray(v) ? v.slice(-12) : []
+  } catch {
+    return []
+  }
+}
+
+function chatSave(msgs) {
+  try {
+    sessionStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-12)))
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function initAiWidget() {
+  const root = document.getElementById('ai-widget')
+  if (!root) return
+
+  const status = await aiStatus()
+  // Remove rather than hide: a dead button that opens a panel saying "not
+  // configured" is worse than no button at all.
+  if (!status.available) {
+    root.remove()
+    return
+  }
+
+  const fab = document.getElementById('ai-widget-toggle')
+  const panel = document.getElementById('ai-widget-panel')
+  const closeBtn = document.getElementById('ai-widget-close')
+  const log = document.getElementById('ai-widget-log')
+  const form = document.getElementById('ai-widget-form')
+  const input = document.getElementById('ai-widget-input')
+  if (!fab || !panel || !log || !form || !input) return
+
+  let messages = chatLoad()
+  let busy = false
+
+  function bubble(role, text, cls = '') {
+    const wrap = document.createElement('div')
+    wrap.className = `ai-msg ai-msg-${role}${cls ? ' ' + cls : ''}`
+    wrap.textContent = text
+    log.appendChild(wrap)
+    log.scrollTop = log.scrollHeight
+    return wrap
+  }
+
+  function paint() {
+    log.innerHTML = ''
+    if (!messages.length) {
+      const hint = document.createElement('div')
+      hint.className = 'ai-msg ai-msg-assistant ai-hint'
+      hint.textContent = 'Hi! Tell me what you need — for example "I need a photo editor" — and I will suggest apps from this store.'
+      log.appendChild(hint)
+      return
+    }
+    messages.forEach((m) => bubble(m.role, m.content))
+  }
+
+  function setOpen(open) {
+    root.dataset.open = String(open)
+    panel.hidden = !open
+    fab.setAttribute('aria-expanded', String(open))
+    fab.setAttribute('aria-label', open ? 'Close AI assistant' : 'Open AI assistant')
+    if (open) {
+      paint()
+      input.focus()
+    }
+  }
+
+  fab.addEventListener('click', () => setOpen(panel.hidden))
+  closeBtn?.addEventListener('click', () => {
+    setOpen(false)
+    fab.focus()
+  })
+  // Escape closes the panel, which keyboard users expect of anything dialog-like.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !panel.hidden) {
+      setOpen(false)
+      fab.focus()
+    }
+  })
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const text = input.value.trim()
+    if (!text || busy) return
+
+    busy = true
+    input.value = ''
+    messages.push({ role: 'user', content: text })
+    chatSave(messages)
+    paint()
+    const thinking = bubble('assistant', 'Thinking…', 'ai-busy')
+
+    const { ok, status: code, data } = await api('/api/ai/chat', {
+      method: 'POST',
+      body: { messages },
+      auth: true,
+    })
+    thinking.remove()
+
+    if (!ok || !data?.success) {
+      bubble('assistant', aiErrorText(code, data), 'ai-error')
+      busy = false
+      return
+    }
+    messages.push({ role: 'assistant', content: data.data.reply })
+    chatSave(messages)
+    paint()
+    busy = false
+  })
+}
+
+/* --------------------------- AI: natural search ------------------------- */
+/**
+ * "Ask AI" on the browse page: a natural-language query returns ranked apps,
+ * each with the reason it was suggested.
+ *
+ * Kept alongside the normal keyword search rather than replacing it. Keyword
+ * search is instant and free; this costs a request and a few seconds, so it is
+ * opt-in for when plain keywords are the wrong tool ("something to edit photos
+ * offline") instead of being forced on every search.
+ */
+async function initAiSearch() {
+  const box = document.getElementById('ai-search')
+  if (!box) return
+
+  const status = await aiStatus()
+  if (!status.available) {
+    box.remove()
+    return
+  }
+
+  const form = document.getElementById('ai-search-form')
+  const input = document.getElementById('ai-search-input')
+  const out = document.getElementById('ai-search-out')
+  if (!form || !input || !out) return
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const query = input.value.trim()
+    if (!query) return
+
+    out.innerHTML = '<p class="ai-busy">Finding the best matches…</p>'
+    const { ok, status: code, data } = await api('/api/ai/search', {
+      method: 'POST',
+      body: { query },
+      auth: true,
+    })
+    if (!ok || !data?.success) {
+      out.innerHTML = `<p class="ai-error">${escHtml(aiErrorText(code, data))}</p>`
+      return
+    }
+    const results = data.data.results || []
+    if (!results.length) {
+      out.innerHTML = '<p class="ai-empty">Nothing in the catalogue matches that yet. Try different words, or browse the categories below.</p>'
+      return
+    }
+    out.innerHTML =
+      `<p class="ai-out-head">${results.length} suggestion${results.length > 1 ? 's' : ''} for “${escHtml(query)}”</p>` +
+      '<ul class="ai-reco-list">' +
+      results
+        .map(
+          (r, i) => `<li class="ai-reco">
+            <span class="ai-reco-rank">${i + 1}</span>
+            <div class="ai-reco-body">
+              <a class="ai-reco-name" href="/app/${encodeURIComponent(r.slug)}">${escHtml(r.name)}</a>
+              <span class="ai-reco-cat">${escHtml(r.category || '')}</span>
+              <p class="ai-reco-why">${escHtml(r.reason || '')}</p>
+            </div>
+          </li>`
+        )
+        .join('') +
+      '</ul>'
+  })
+}
+
+/* ----------------------- AI: "Apps You Might Like" --------------------- */
+/**
+ * Personalised row on the home page.
+ *
+ * Only renders when there is real activity to personalise from. With no signals
+ * the section stays hidden instead of showing popular apps under a
+ * "recommended for you" heading, which would be a lie.
+ */
+async function initAiPicks() {
+  const section = document.getElementById('ai-picks')
+  if (!section) return
+
+  const recent = recentGet()
+  const status = await aiStatus()
+  if (!status.available || !recent.length) {
+    section.remove()
+    return
+  }
+
+  const out = document.getElementById('ai-picks-out')
+  if (!out) return
+  out.innerHTML = '<p class="ai-busy">Personalising…</p>'
+
+  // Signed-in visitors also contribute their real installed apps.
+  let installed = []
+  if (Session.token()) {
+    const me = await whoami()
+    if (me?.installed_slugs) installed = me.installed_slugs
+  }
+
+  const { ok, data } = await api('/api/ai/picks', {
+    method: 'POST',
+    body: { recent, installed, liked_categories: [] },
+    auth: true,
+  })
+  const results = ok && data?.success ? data.data.results || [] : []
+  if (!results.length) {
+    section.remove()
+    return
+  }
+  section.hidden = false
+  out.innerHTML =
+    '<ul class="ai-reco-list ai-reco-grid">' +
+    results
+      .map(
+        (r) => `<li class="ai-reco">
+          <div class="ai-reco-body">
+            <a class="ai-reco-name" href="/app/${encodeURIComponent(r.slug)}">${escHtml(r.name)}</a>
+            <span class="ai-reco-cat">${escHtml(r.category || '')}</span>
+            <p class="ai-reco-why">${escHtml(r.reason || '')}</p>
+          </div>
+        </li>`
+      )
+      .join('') +
+    '</ul>'
+}
+
+/* --------------------------- AI: app comparison ------------------------ */
+/**
+ * Compare this app against another, on the app detail page.
+ *
+ * One side is fixed to the app being viewed, which is both the common case and
+ * removes a whole class of user error: there is only one thing to choose.
+ */
+async function initAiCompare() {
+  const box = document.getElementById('ai-compare')
+  if (!box) return
+
+  const status = await aiStatus()
+  if (!status.available) {
+    box.remove()
+    return
+  }
+
+  const select = document.getElementById('ai-compare-with')
+  const btn = document.getElementById('ai-compare-go')
+  const out = document.getElementById('ai-compare-out')
+  const mine = box.dataset.slug
+  if (!select || !btn || !out || !mine) return
+
+  // Populate from the same category first — those are the real alternatives.
+  const { ok, data } = await api(`/api/apps?limit=24&category=${encodeURIComponent(box.dataset.category || '')}`)
+  let options = ok && data?.success ? (data.apps || []).filter((a) => a.slug !== mine) : []
+  if (options.length < 2) {
+    const all = await api('/api/apps?limit=24&sort=popular')
+    if (all.ok && all.data?.success) {
+      const seen = new Set(options.map((o) => o.slug))
+      ;(all.data.apps || []).forEach((a) => {
+        if (a.slug !== mine && !seen.has(a.slug)) options.push(a)
+      })
+    }
+  }
+  if (!options.length) {
+    box.remove()
+    return
+  }
+  select.innerHTML =
+    '<option value="">Choose an app…</option>' +
+    options.slice(0, 24).map((a) => `<option value="${escHtml(a.slug)}">${escHtml(a.name)}</option>`).join('')
+
+  btn.addEventListener('click', async () => {
+    const other = select.value
+    if (!other) {
+      toast('Pick an app to compare with.', 'info')
+      return
+    }
+    btn.disabled = true
+    out.innerHTML = '<p class="ai-busy">Comparing…</p>'
+    const res = await api('/api/ai/compare', { method: 'POST', body: { a: mine, b: other }, auth: true })
+    btn.disabled = false
+    if (!res.ok || !res.data?.success) {
+      out.innerHTML = `<p class="ai-error">${escHtml(aiErrorText(res.status, res.data))}</p>`
+      return
+    }
+    const d = res.data.data
+    const prosCons = (title, pros, cons) =>
+      `<div class="ai-cmp-col">
+        <h5>${escHtml(title)}</h5>
+        ${pros.length ? `<ul class="ai-cmp-pros">${pros.map((p) => `<li>${escHtml(p)}</li>`).join('')}</ul>` : ''}
+        ${cons.length ? `<ul class="ai-cmp-cons">${cons.map((p) => `<li>${escHtml(p)}</li>`).join('')}</ul>` : ''}
+      </div>`
+
+    out.innerHTML =
+      (d.rows.length
+        ? `<div class="table-wrap"><table class="ai-cmp-table">
+            <thead><tr><th scope="col">Aspect</th><th scope="col">${escHtml(d.a.name)}</th><th scope="col">${escHtml(d.b.name)}</th></tr></thead>
+            <tbody>${d.rows
+              .map(
+                (r) =>
+                  `<tr><th scope="row">${escHtml(r.aspect)}</th><td>${escHtml(r.a)}</td><td>${escHtml(r.b)}</td></tr>`
+              )
+              .join('')}</tbody></table></div>`
+        : '') +
+      `<div class="ai-cmp-cols">${prosCons(d.a.name, d.pros_a, d.cons_a)}${prosCons(d.b.name, d.pros_b, d.cons_b)}</div>` +
+      (d.verdict ? `<p class="ai-cmp-verdict"><strong>Which should you pick?</strong> ${escHtml(d.verdict)}</p>` : '') +
+      '<p class="ai-disclaimer">AI-generated from each app\u2019s listing. Check the details yourself before installing.</p>'
+  })
+}
+
 /* ------------------------------ bootstrap ------------------------------ */
 function boot() {
   initTheme()
@@ -2205,16 +2591,22 @@ function boot() {
   initGetButtons()
   initDeepLinks()
   initAccount()
+  // Site-wide: the assistant must be reachable from any page.
+  initAiWidget()
 
   switch (BOOT.page) {
     case 'browse':
       initBrowse()
+      initAiSearch()
       break
     case 'charts':
       initCharts()
       break
     case 'app':
       initReviewForm()
+      // Remember the visit so "Apps You Might Like" has something to work with.
+      recentPush(BOOT.slug)
+      initAiCompare()
       break
     case 'auth-login':
       initAuthPage('login')
@@ -2251,6 +2643,9 @@ function boot() {
       break
     case 'dev-docs':
       initDocs()
+      break
+    case 'home':
+      initAiPicks()
       break
     default:
       break

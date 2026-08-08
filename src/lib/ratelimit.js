@@ -23,7 +23,21 @@ export const TIERS = {
   ai: 20
 };
 
+/**
+ * Short-window burst limits, in requests per MINUTE.
+ *
+ * The hourly tiers above stop sustained abuse but do nothing about a burst: a
+ * user could spend an entire hourly AI budget in ten seconds by holding down
+ * Enter, which is both expensive and a bad experience (many in-flight requests,
+ * answers arriving out of order). These add a second, per-minute gate so AI
+ * usage is paced as well as capped.
+ */
+export const BURST = {
+  ai: 3
+};
+
 const WINDOW_MS = 60 * 60 * 1000; // 1 hour, fixed window
+const BURST_WINDOW_MS = 60 * 1000; // 1 minute, fixed window
 
 /**
  * Per-isolate counters. Bounded so a long-lived isolate seeing many distinct
@@ -32,11 +46,11 @@ const WINDOW_MS = 60 * 60 * 1000; // 1 hour, fixed window
 const buckets = new Map();
 const MAX_BUCKETS = 5000;
 
-function bucket(id, now) {
+function bucket(id, now, windowMs = WINDOW_MS) {
   let b = buckets.get(id);
   if (!b || now >= b.reset) {
     // Fixed window: start a fresh one.
-    b = { count: 0, reset: now + WINDOW_MS };
+    b = { count: 0, reset: now + windowMs };
     if (buckets.size >= MAX_BUCKETS) {
       // Drop the oldest-resetting entries rather than clearing everything, so
       // active clients keep their counters.
@@ -66,6 +80,28 @@ export function consume(id, tier = "free") {
     limit,
     remaining,
     reset,
+    retryAfter: Math.max(1, Math.ceil((b.reset - now) / 1000))
+  };
+}
+
+/**
+ * Consume one unit against the short per-minute burst window for `id`.
+ *
+ * Kept separate from `consume()` so the hourly budget is NOT spent when a burst
+ * is rejected: being told "slow down for a few seconds" should not also cost the
+ * user one of their 20 hourly AI calls. Callers therefore check burst first and
+ * only charge the hourly bucket once the burst check passes.
+ */
+export function consumeBurst(id, kind = "ai") {
+  const limit = BURST[kind] || BURST.ai;
+  const now = Date.now();
+  const b = bucket(`burst:${kind}:${id}`, now, BURST_WINDOW_MS);
+  b.count += 1;
+  return {
+    allowed: b.count <= limit,
+    limit,
+    remaining: Math.max(0, limit - b.count),
+    reset: Math.ceil(b.reset / 1000),
     retryAfter: Math.max(1, Math.ceil((b.reset - now) / 1000))
   };
 }

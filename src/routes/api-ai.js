@@ -11,7 +11,7 @@
  */
 import { Hono } from "hono";
 import { sbSelect } from "../lib/supabase.js";
-import { consume, applyHeaders } from "../lib/ratelimit.js";
+import { consume, consumeBurst, applyHeaders } from "../lib/ratelimit.js";
 import { bearer } from "../lib/supabase.js";
 import { sbAuth } from "../lib/supabase.js";
 
@@ -27,20 +27,95 @@ const MODEL = "openai/gpt-4o-mini";
 const MAX_CONTEXT_APPS = 60;
 const MAX_PROMPT_CHARS = 500;
 
+/**
+ * Response cache, keyed on the exact request shape.
+ *
+ * Two visitors asking "best photo editor" should not cost two API calls, and the
+ * catalogue changes far more slowly than people ask about it. Per-isolate and
+ * bounded, same honest caveat as the rate limiter: it is a cost/latency
+ * optimisation, not a guaranteed global cache.
+ */
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_CACHE = 200;
+const cache = new Map();
+
+function cacheGet(key) {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  if (Date.now() >= hit.expires) {
+    cache.delete(key);
+    return null;
+  }
+  // Refresh insertion order so hot entries survive eviction.
+  cache.delete(key);
+  cache.set(key, hit);
+  return hit.value;
+}
+
+function cacheSet(key, value) {
+  if (cache.size >= MAX_CACHE) cache.delete(cache.keys().next().value);
+  cache.set(key, { value, expires: Date.now() + CACHE_TTL_MS });
+}
+
 function fail(c, status, message, code) {
   return c.json({ success: false, error: message, code: code || "ai_error" }, status);
 }
 
-/** Trim the catalogue to the few fields the model actually needs to reason. */
+/**
+ * Trim the catalogue to the few fields the model actually needs to reason.
+ *
+ * Column names are the REAL ones on `apps` (`rating`, `total_downloads`, and no
+ * `tagline` column at all -- the first line of `description` stands in for one).
+ * An earlier version of this file guessed `rating_average` / `download_count` /
+ * `tagline`; PostgREST answered `column apps.tagline does not exist`, so
+ * `catalogue()` returned an error object instead of rows and every AI reply was
+ * generated with NO catalogue context. It still produced fluent answers, which
+ * is exactly why that slipped through -- so `/api/ai/context` below now exposes
+ * the app count for tests to assert on.
+ */
 function slimApp(a) {
+  const desc = String(a.description || "").replace(/\s+/g, " ").trim();
   return {
     slug: a.app_slug,
     name: a.app_name,
     category: a.category,
-    tagline: a.tagline || "",
-    rating: a.rating_average,
-    downloads: a.download_count
+    summary: desc.slice(0, 160),
+    rating: a.rating,
+    downloads: a.total_downloads,
+    price: a.is_free ? "Free" : String(a.price ?? "")
   };
+}
+
+/**
+ * Pull the JSON payload out of a model reply.
+ *
+ * Models wrap JSON in prose or ```json fences even when told not to, so a bare
+ * JSON.parse fails often enough to matter. Falling back to the outermost
+ * bracketed span recovers nearly all of those cases.
+ */
+function parseJson(text, expect = "array") {
+  const attempt = (s) => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  };
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const candidates = [text, fenced && fenced[1]].filter(Boolean);
+  const open = expect === "array" ? "[" : "{";
+  const close = expect === "array" ? "]" : "}";
+  for (const raw of candidates) {
+    const direct = attempt(raw.trim());
+    if (direct) return direct;
+    const a = raw.indexOf(open);
+    const b = raw.lastIndexOf(close);
+    if (a !== -1 && b > a) {
+      const span = attempt(raw.slice(a, b + 1));
+      if (span) return span;
+    }
+  }
+  return null;
 }
 
 /**
@@ -49,10 +124,14 @@ function slimApp(a) {
  * Every failure mode returns a plain-language message rather than leaking the
  * upstream body, which can echo request details.
  */
-async function complete(env, messages, maxTokens) {
+async function complete(env, messages, maxTokens, cacheKey) {
   const key = env.OPENROUTER_API_KEY;
   if (!key) {
     return { error: "The AI assistant is not configured on this deployment.", status: 503 };
+  }
+  if (cacheKey) {
+    const hit = cacheGet(cacheKey);
+    if (hit) return { text: hit, cached: true };
   }
   let res;
   try {
@@ -93,6 +172,7 @@ async function complete(env, messages, maxTokens) {
   }
   const text = data?.choices?.[0]?.message?.content;
   if (!text) return { error: "The AI service returned an empty answer.", status: 502 };
+  if (cacheKey) cacheSet(cacheKey, String(text));
   return { text: String(text) };
 }
 
@@ -109,6 +189,16 @@ async function gate(c) {
   const { data: user, error } = await sbAuth(c.env, "user", { token });
   if (error || !user?.id) return { err: fail(c, 401, "Your session has expired. Sign in again.", "auth_required") };
 
+  // Burst gate first, and deliberately BEFORE the hourly charge: telling someone
+  // to slow down for a few seconds should not also cost one of their 20 calls.
+  const burst = consumeBurst(user.id, "ai");
+  if (!burst.allowed) {
+    c.header("Retry-After", String(burst.retryAfter));
+    return {
+      err: fail(c, 429, `Please wait ${burst.retryAfter}s — max ${burst.limit} AI requests per minute.`, "rate_limited")
+    };
+  }
+
   // 20/hour per user. Deliberately tighter than the data APIs because each call
   // has a direct cost. Same per-isolate caveat as the rest of the app: it stops
   // runaway loops, it is not a hard distributed boundary.
@@ -121,15 +211,68 @@ async function gate(c) {
   return { user };
 }
 
+/**
+ * Gate for the STOREFRONT AI features (search, chat widget, compare, picks).
+ *
+ * These have to work for a signed-out shopper -- requiring an account before you
+ * can ask "which photo editor is best" would defeat the point of the feature.
+ * That reintroduces the cost problem the developer gate solves with a user id,
+ * so identity falls back to the client IP, and the limits are the same tight
+ * AI ones. A signed-in visitor is keyed by user id so they are not lumped in
+ * with everyone else behind a shared NAT.
+ *
+ * Being explicit about the limitation: IP is spoofable in general, but on
+ * Cloudflare `CF-Connecting-IP` is set by the edge and cannot be forged by the
+ * client, so it is a sound key here. A large NAT still shares one budget, which
+ * is the deliberate trade for keeping the feature open to visitors.
+ */
+async function visitorGate(c) {
+  if (!c.env.OPENROUTER_API_KEY) {
+    return { err: fail(c, 503, "The AI assistant is not configured on this deployment.", "ai_unavailable") };
+  }
+
+  let id = null;
+  const token = bearer(c.req.header("Authorization"));
+  if (token) {
+    const { data: user } = await sbAuth(c.env, "user", { token });
+    if (user?.id) id = `u:${user.id}`;
+  }
+  if (!id) {
+    const ip =
+      c.req.header("CF-Connecting-IP") ||
+      (c.req.header("X-Forwarded-For") || "").split(",")[0].trim() ||
+      "anon";
+    id = `ip:${ip}`;
+  }
+
+  const burst = consumeBurst(id, "ai");
+  if (!burst.allowed) {
+    c.header("Retry-After", String(burst.retryAfter));
+    return {
+      err: fail(c, 429, `Please wait ${burst.retryAfter}s \u2014 max ${burst.limit} AI requests per minute.`, "rate_limited")
+    };
+  }
+  const rl = consume(`ai:${id}`, "ai");
+  applyHeaders(c, rl);
+  if (!rl.allowed) {
+    c.header("Retry-After", String(rl.retryAfter));
+    return { err: fail(c, 429, `You have used all ${rl.limit} AI requests for this hour.`, "rate_limited") };
+  }
+  return { id };
+}
+
 /** Load a compact published-app catalogue to ground the model in real data. */
 async function catalogue(env) {
-  const { data } = await sbSelect(
+  const { data, error } = await sbSelect(
     env,
     "apps",
-    "select=app_slug,app_name,category,tagline,rating_average,download_count" +
-      `&status=eq.published&order=download_count.desc&limit=${MAX_CONTEXT_APPS}`
+    "select=app_slug,app_name,category,description,rating,total_downloads,is_free,price" +
+      `&status=eq.published&order=total_downloads.desc&limit=${MAX_CONTEXT_APPS}`
   );
-  return (data || []).map(slimApp);
+  // A failed query must not masquerade as an empty catalogue: returning [] here
+  // would let the model answer confidently with no grounding at all.
+  if (error || !Array.isArray(data)) return [];
+  return data.map(slimApp);
 }
 
 /* ── Endpoints ───────────────────────────────────────────────────────────── */
@@ -142,10 +285,34 @@ ai.get("/ai", (c) =>
       available: !!c.env.OPENROUTER_API_KEY,
       model: MODEL,
       limit_per_hour: 20,
-      endpoints: ["POST /api/ai/ask", "POST /api/ai/listing"]
+      limit_per_minute: 3,
+      endpoints: [
+        "POST /api/ai/ask",
+        "POST /api/ai/listing",
+        "POST /api/ai/search",
+        "POST /api/ai/chat",
+        "POST /api/ai/compare",
+        "POST /api/ai/picks"
+      ]
     }
   })
 );
+
+/**
+ * GET /api/ai/context — how many catalogue apps the model is actually grounded on.
+ *
+ * Exists because a broken catalogue query is invisible from the outside: the
+ * model keeps answering fluently with no data (see the note on `slimApp`). This
+ * makes the grounding assertable, so a regression fails a test instead of
+ * quietly degrading every answer.
+ */
+ai.get("/ai/context", async (c) => {
+  const apps = await catalogue(c.env);
+  return c.json({
+    success: true,
+    data: { apps: apps.length, sample: apps.slice(0, 3).map((a) => a.slug), fields: Object.keys(apps[0] || {}) }
+  });
+});
 
 /**
  * POST /api/ai/ask — free-form question, grounded in the real app catalogue.
@@ -232,6 +399,262 @@ ai.post("/ai/listing", async (c) => {
     success: true,
     data: { tagline, description, features, raw: text, model: MODEL }
   });
+});
+
+/* ── Storefront AI (search, chat, compare, picks) ────────────────────────── */
+
+/** Resolve slugs the model returned back to real catalogue rows, in AI order. */
+function hydrate(recs, apps) {
+  const bySlug = new Map(apps.map((a) => [String(a.slug).toLowerCase(), a]));
+  const byName = new Map(apps.map((a) => [String(a.name).toLowerCase(), a]));
+  const out = [];
+  const seen = new Set();
+  for (const r of recs || []) {
+    const slug = String(r.slug || "").toLowerCase();
+    const name = String(r.name || "").toLowerCase();
+    // Trust the catalogue, not the model: an app it invented has no match here
+    // and is silently dropped, so a hallucination can never reach the UI.
+    const app = bySlug.get(slug) || byName.get(name);
+    if (!app || seen.has(app.slug)) continue;
+    seen.add(app.slug);
+    out.push({ slug: app.slug, name: app.name, category: app.category, reason: String(r.reason || "").slice(0, 240) });
+  }
+  return out;
+}
+
+/**
+ * POST /api/ai/search — natural-language app search.
+ * Body: { query }
+ * Returns ranked recommendations, each with the AI's reason.
+ */
+ai.post("/ai/search", async (c) => {
+  const { err } = await visitorGate(c);
+  if (err) return err;
+
+  const body = await c.req.json().catch(() => ({}));
+  const query = String(body.query || "").trim().slice(0, MAX_PROMPT_CHARS);
+  if (!query) return fail(c, 422, "Type what you are looking for.", "validation_failed");
+
+  const apps = await catalogue(c.env);
+  if (!apps.length) return c.json({ success: true, data: { query, results: [], note: "The catalogue is empty." } });
+
+  const { text, error, status, cached } = await complete(
+    c.env,
+    [
+      {
+        role: "system",
+        content:
+          "You match a shopper's need to apps in a store catalogue. " +
+          "Return ONLY a JSON array, no prose, no code fence. " +
+          'Each element: {"slug":"<exact slug from the catalogue>","reason":"<max 20 words, why it fits>"}. ' +
+          "Order best match first. Return at most 6. " +
+          "ONLY use slugs present in the catalogue. If nothing fits, return []. " +
+          "Never invent an app. " +
+          `Catalogue: ${JSON.stringify(apps)}`
+      },
+      { role: "user", content: query }
+    ],
+    500,
+    // Same question + same catalogue size = same answer, so cache it.
+    `search:${apps.length}:${query.toLowerCase()}`
+  );
+  if (error) return fail(c, status || 502, error);
+
+  const parsed = parseJson(text, "array");
+  const results = hydrate(Array.isArray(parsed) ? parsed : [], apps);
+  return c.json({ success: true, data: { query, results, cached: !!cached, model: MODEL } });
+});
+
+/**
+ * POST /api/ai/chat — the floating assistant widget.
+ * Body: { messages: [{ role, content }], }
+ *
+ * History is supplied by the client and capped here; the server keeps no
+ * conversation state, which suits a stateless Worker and means a visitor's chat
+ * is never stored anywhere.
+ */
+ai.post("/ai/chat", async (c) => {
+  const { err } = await visitorGate(c);
+  if (err) return err;
+
+  const body = await c.req.json().catch(() => ({}));
+  const history = Array.isArray(body.messages) ? body.messages : [];
+  // Only the last few turns: enough for context, bounded for cost.
+  const turns = history
+    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-6)
+    .map((m) => ({ role: m.role, content: String(m.content).slice(0, MAX_PROMPT_CHARS) }));
+  if (!turns.length || turns[turns.length - 1].role !== "user") {
+    return fail(c, 422, "Type a message first.", "validation_failed");
+  }
+
+  const apps = await catalogue(c.env);
+  const { text, error, status } = await complete(
+    c.env,
+    [
+      {
+        role: "system",
+        content:
+          "You are the shopping assistant for Open Appstore. Be brief and friendly: 2-4 sentences. " +
+          "Plain text only, no markdown. " +
+          "When suggesting apps, ONLY use apps from this catalogue and name them exactly. " +
+          "If nothing in the catalogue fits, say so honestly instead of inventing an app. " +
+          `Catalogue: ${JSON.stringify(apps)}`
+      },
+      ...turns
+    ],
+    400
+  );
+  if (error) return fail(c, status || 502, error);
+  return c.json({ success: true, data: { reply: text, model: MODEL } });
+});
+
+/**
+ * POST /api/ai/compare — compare two apps.
+ * Body: { a: slug, b: slug }
+ *
+ * The apps are loaded from OUR database and only the slugs come from the client,
+ * so the comparison is always grounded in real listing data.
+ */
+ai.post("/ai/compare", async (c) => {
+  const { err } = await visitorGate(c);
+  if (err) return err;
+
+  const body = await c.req.json().catch(() => ({}));
+  const slugA = String(body.a || "").trim().slice(0, 120);
+  const slugB = String(body.b || "").trim().slice(0, 120);
+  if (!slugA || !slugB) return fail(c, 422, "Pick two apps to compare.", "validation_failed");
+  if (slugA === slugB) return fail(c, 422, "Pick two different apps.", "validation_failed");
+
+  const fields =
+    "select=app_slug,app_name,category,description,icon_url,rating,total_reviews,total_downloads,is_free,price,current_version";
+  const load = async (slug) => {
+    const { data } = await sbSelect(c.env, "apps", `${fields}&app_slug=eq.${encodeURIComponent(slug)}&status=eq.published&limit=1`);
+    return (data || [])[0] || null;
+  };
+  const [rowA, rowB] = await Promise.all([load(slugA), load(slugB)]);
+  if (!rowA || !rowB) return fail(c, 404, "One of those apps could not be found.", "not_found");
+
+  const trim = (r) => ({
+    slug: r.app_slug,
+    name: r.app_name,
+    category: r.category,
+    description: String(r.description || "").replace(/\s+/g, " ").trim().slice(0, 700),
+    rating: r.rating,
+    reviews: r.total_reviews,
+    downloads: r.total_downloads,
+    price: r.is_free ? "Free" : `${r.price}`,
+    version: r.current_version
+  });
+
+  const { text, error, status, cached } = await complete(
+    c.env,
+    [
+      {
+        role: "system",
+        content:
+          "Compare two apps for a shopper. Return ONLY JSON, no prose, no code fence, exactly this shape:\n" +
+          '{"rows":[{"aspect":"<short label>","a":"<about app A>","b":"<about app B>"}],' +
+          '"pros_a":["..."],"cons_a":["..."],"pros_b":["..."],"cons_b":["..."],' +
+          '"verdict":"<2 sentences: who should pick which, and why>"}\n' +
+          "Use 4-6 rows. Base every claim ONLY on the supplied data. " +
+          "If the data does not say something, do not assert it -- say \"not stated\"."
+      },
+      { role: "user", content: `App A:\n${JSON.stringify(trim(rowA))}\n\nApp B:\n${JSON.stringify(trim(rowB))}` }
+    ],
+    900,
+    `compare:${[slugA, slugB].sort().join("|")}`
+  );
+  if (error) return fail(c, status || 502, error);
+
+  const parsed = parseJson(text, "object") || {};
+  const list = (v) => (Array.isArray(v) ? v.map((x) => String(x).slice(0, 200)).slice(0, 6) : []);
+  return c.json({
+    success: true,
+    data: {
+      a: { slug: rowA.app_slug, name: rowA.app_name, icon: rowA.icon_url || null },
+      b: { slug: rowB.app_slug, name: rowB.app_name, icon: rowB.icon_url || null },
+      rows: Array.isArray(parsed.rows)
+        ? parsed.rows
+            .filter((r) => r && r.aspect)
+            .map((r) => ({
+              aspect: String(r.aspect).slice(0, 60),
+              a: String(r.a ?? "").slice(0, 240),
+              b: String(r.b ?? "").slice(0, 240)
+            }))
+            .slice(0, 8)
+        : [],
+      pros_a: list(parsed.pros_a),
+      cons_a: list(parsed.cons_a),
+      pros_b: list(parsed.pros_b),
+      cons_b: list(parsed.cons_b),
+      verdict: String(parsed.verdict || "").slice(0, 600),
+      cached: !!cached,
+      model: MODEL
+    }
+  });
+});
+
+/**
+ * POST /api/ai/picks — "Apps You Might Like".
+ * Body: { recent: [slug], installed: [slug], liked_categories: [name] }
+ *
+ * Signals come from the client (localStorage recent views) plus, when signed in,
+ * the visitor's real installed apps. With no signals at all this returns nothing
+ * rather than a generic list -- the store already has a popular section, and a
+ * fake "personalised" row is worse than none.
+ */
+ai.post("/ai/picks", async (c) => {
+  const { err } = await visitorGate(c);
+  if (err) return err;
+
+  const body = await c.req.json().catch(() => ({}));
+  const clean = (v) =>
+    (Array.isArray(v) ? v : [])
+      .map((x) => String(x || "").trim().slice(0, 120))
+      .filter(Boolean)
+      .slice(0, 12);
+  const recent = clean(body.recent);
+  const installed = clean(body.installed);
+  const cats = clean(body.liked_categories);
+
+  if (!recent.length && !installed.length && !cats.length) {
+    return c.json({ success: true, data: { results: [], note: "Not enough activity yet." } });
+  }
+
+  const apps = await catalogue(c.env);
+  // Never recommend something the visitor already has.
+  const pool = apps.filter((a) => !installed.includes(a.slug));
+  if (!pool.length) return c.json({ success: true, data: { results: [] } });
+
+  const { text, error, status, cached } = await complete(
+    c.env,
+    [
+      {
+        role: "system",
+        content:
+          "You personalise app recommendations. Return ONLY a JSON array, no prose, no code fence. " +
+          'Each element: {"slug":"<exact slug from the catalogue>","reason":"<max 15 words, tied to their activity>"}. ' +
+          "Return at most 6, best first. ONLY use slugs from the catalogue. " +
+          "Do not recommend apps the user already installed. Never invent an app. " +
+          `Catalogue: ${JSON.stringify(pool)}`
+      },
+      {
+        role: "user",
+        content:
+          `Recently viewed: ${recent.join(", ") || "none"}\n` +
+          `Already installed: ${installed.join(", ") || "none"}\n` +
+          `Categories they engage with: ${cats.join(", ") || "unknown"}`
+      }
+    ],
+    500,
+    `picks:${pool.length}:${recent.join(",")}|${installed.join(",")}|${cats.join(",")}`
+  );
+  if (error) return fail(c, status || 502, error);
+
+  const parsed = parseJson(text, "array");
+  const results = hydrate(Array.isArray(parsed) ? parsed : [], pool);
+  return c.json({ success: true, data: { results, cached: !!cached, model: MODEL } });
 });
 
 export default ai;
