@@ -1602,3 +1602,99 @@ input:focus, select:focus, textarea:focus {
 .ai-answer { white-space: pre-wrap; line-height: 1.6; }
 .ai-busy { margin: 0; color: var(--text-2); }
 .ai-error { margin: 0; color: var(--danger, #dc2626); }
+
+/* ============================================================
+   AI features — floating assistant, natural search, comparison
+   Uses the existing design tokens so these read as part of the
+   store rather than a bolted-on widget.
+   ============================================================ */
+
+/* --- floating assistant ------------------------------------ */
+.ai-widget { position: fixed; right: 1rem; bottom: 1rem; z-index: 70; display: flex; flex-direction: column; align-items: flex-end; gap: .6rem; }
+
+.ai-fab {
+  width: 56px; height: 56px; border-radius: 50%; border: 0; cursor: pointer;
+  background: linear-gradient(135deg, var(--brand), var(--brand-2));
+  color: #fff; font-size: 1.25rem; box-shadow: var(--shadow-lg);
+  display: grid; place-items: center; transition: transform .18s var(--ease), box-shadow .18s var(--ease);
+}
+.ai-fab:hover { transform: translateY(-2px) scale(1.04); }
+.ai-fab:focus-visible { outline: 3px solid var(--brand-2); outline-offset: 3px; }
+
+.ai-panel {
+  width: min(360px, calc(100vw - 2rem));
+  height: min(460px, calc(100vh - 8rem));
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ai-panel-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .7rem .85rem; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.ai-panel-title { font-weight: 700; font-size: .92rem; display: inline-flex; align-items: center; gap: .45rem; }
+.ai-panel-title i { color: var(--brand-2); }
+
+.ai-log { flex: 1; overflow-y: auto; padding: .85rem; display: flex; flex-direction: column; gap: .55rem; }
+.ai-msg { max-width: 85%; padding: .55rem .75rem; border-radius: 14px; font-size: .88rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.ai-msg-user { align-self: flex-end; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; border-bottom-right-radius: 4px; }
+.ai-msg-assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-bottom-left-radius: 4px; }
+.ai-msg.ai-hint { color: var(--text-2); font-style: italic; }
+.ai-msg.ai-error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+html[data-theme='dark'] .ai-msg.ai-error { background: rgba(220, 38, 38, .16); border-color: rgba(220, 38, 38, .4); color: #fca5a5; }
+
+.ai-panel-form { display: flex; gap: .45rem; padding: .7rem; border-top: 1px solid var(--border); background: var(--surface-2); }
+.ai-panel-input { flex: 1; min-width: 0; padding: .55rem .7rem; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: .9rem; }
+.ai-panel-input:focus { outline: 2px solid var(--brand-2); outline-offset: 1px; }
+.ai-panel-send { padding: .5rem .8rem; }
+
+/* On a phone the panel goes full-bleed: a 360px card floating over a 360px
+   viewport leaves no usable margin. */
+@media (max-width: 480px) {
+  .ai-widget { right: .6rem; bottom: .6rem; left: .6rem; align-items: stretch; }
+  .ai-panel { width: auto; height: min(70vh, 520px); }
+  .ai-fab { align-self: flex-end; }
+}
+/* Keep the FAB clear of the mobile tab bar so it never covers navigation. */
+@media (max-width: 900px) {
+  .ai-widget { bottom: calc(var(--tabbar-h, 64px) + .6rem); }
+}
+
+/* --- natural-language search ------------------------------- */
+.ai-search { max-width: var(--maxw); margin: 1.25rem auto 0; padding: 0 clamp(1rem, 3vw, 2rem); }
+.ai-search-form { border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; background: linear-gradient(135deg, var(--brand-soft), var(--surface)); }
+html[data-theme='dark'] .ai-search-form { background: linear-gradient(135deg, rgba(124, 58, 237, .16), var(--surface)); }
+.ai-search-label { display: flex; align-items: center; gap: .5rem; font-weight: 700; font-size: .93rem; margin-bottom: .6rem; }
+.ai-search-label i { color: var(--brand-2); }
+.ai-search-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+.ai-search-row input { flex: 1 1 260px; min-width: 0; padding: .6rem .8rem; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.ai-search-row input:focus { outline: 2px solid var(--brand-2); outline-offset: 1px; }
+.ai-search-out:not(:empty) { margin-top: .9rem; }
+.ai-out-head { margin: 0 0 .6rem; font-weight: 700; font-size: .9rem; color: var(--text-2); }
+.ai-empty { margin: 0; color: var(--text-2); }
+
+/* --- recommendation lists ---------------------------------- */
+.ai-reco-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
+.ai-reco-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .7rem; }
+.ai-reco { display: flex; gap: .7rem; align-items: flex-start; padding: .7rem .85rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.ai-reco-rank { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: .78rem; font-weight: 700; background: var(--brand-soft); color: var(--brand); }
+html[data-theme='dark'] .ai-reco-rank { background: rgba(124, 58, 237, .22); color: #c4b5fd; }
+.ai-reco-body { min-width: 0; }
+.ai-reco-name { font-weight: 700; text-decoration: none; color: var(--text); }
+.ai-reco-name:hover { color: var(--brand); text-decoration: underline; }
+.ai-reco-cat { margin-left: .45rem; font-size: .75rem; color: var(--text-3); }
+.ai-reco-why { margin: .2rem 0 0; font-size: .85rem; color: var(--text-2); line-height: 1.45; }
+
+/* --- comparison -------------------------------------------- */
+.ai-cmp-controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.ai-cmp-select { flex: 1 1 200px; min-width: 0; padding: .55rem .7rem; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.ai-cmp-out:not(:empty) { margin-top: 1rem; }
+.ai-cmp-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.ai-cmp-table th, .ai-cmp-table td { padding: .55rem .7rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+.ai-cmp-table thead th { background: var(--surface-2); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: var(--text-3); }
+.ai-cmp-table tbody th { background: var(--surface-2); font-weight: 600; white-space: nowrap; }
+.ai-cmp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .9rem; margin-top: 1rem; }
+.ai-cmp-col h5 { margin: 0 0 .4rem; font-size: .88rem; }
+.ai-cmp-col ul { margin: 0 0 .5rem; padding-left: 1.1rem; font-size: .85rem; color: var(--text-2); }
+.ai-cmp-pros li::marker { color: var(--success); }
+.ai-cmp-cons li::marker { color: var(--danger); }
+.ai-cmp-verdict { margin: 1rem 0 0; padding: .75rem .9rem; border-left: 3px solid var(--brand-2); background: var(--surface-2); border-radius: 0 10px 10px 0; font-size: .9rem; line-height: 1.55; }
+/* Every AI surface says so: users should know what generated the text. */
+.ai-disclaimer { margin: .7rem 0 0; font-size: .76rem; color: var(--text-3); }

@@ -16,7 +16,17 @@ import {
   CATEGORIES,
   toAppView
 } from "./lib/types.js";
-import { layout, esc, setSiteVerification } from "./views/layout.js";
+import { layout, esc, setSiteVerification, setRequestUrl } from "./views/layout.js";
+import {
+  websiteLd,
+  breadcrumbLd,
+  appLd,
+  itemListLd,
+  collectionLd,
+  webPageLd,
+  robotsTxt,
+  sitemapXml
+} from "./lib/seo.js";
 import { notFoundArt } from "./views/components.js";
 import {
   homePage,
@@ -50,6 +60,9 @@ const app = new Hono();
 // module scope.
 app.use("*", async (c, next) => {
   setSiteVerification(c.env.GOOGLE_SITE_VERIFICATION || "");
+  // Canonical/og:url need the absolute request origin, which only exists inside
+  // a request. Set here so every layout() call gets it without passing it in.
+  setRequestUrl(c.req.url);
   await next();
 });
 
@@ -243,6 +256,13 @@ app.get("/", async (c) => {
       title: "Discover apps",
       description: "Open Appstore \u2014 discover, browse and download apps from independent developers. Publish your own app in minutes.",
       active: "home",
+      // WebSite + SearchAction is what can earn a sitelinks search box; the
+      // ItemList tells Google the popular apps on this page are real entities
+      // worth following.
+      jsonLd: [
+        websiteLd(new URL(c.req.url).origin),
+        itemListLd(new URL(c.req.url).origin, "Popular apps on Open Appstore", all, 20)
+      ],
       body: homePage({
         apps: all,
         featured,

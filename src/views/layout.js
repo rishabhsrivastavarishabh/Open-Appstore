@@ -1,4 +1,5 @@
 import { html, raw } from "hono/html";
+import { ldScript } from "../lib/seo.js";
 const SITE_NAME = "Open Appstore";
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -33,24 +34,107 @@ function setSiteVerification(token) {
   SITE_VERIFICATION = typeof token === "string" ? token.trim() : "";
 }
 
+/*
+ * Canonical origin for the current request, set by the same middleware.
+ *
+ * Canonical/og:url must be ABSOLUTE, and the origin is only knowable per
+ * request (preview deployments each get their own *.pages.dev hostname). Held
+ * module-side for the same reason as the verification token: threading it
+ * through 22 layout() call sites means the one page someone forgets to update
+ * silently ships without a canonical URL, which is exactly the duplicate-content
+ * problem canonicals exist to solve.
+ */
+let SITE_ORIGIN = "";
+let REQUEST_PATH = "/";
+
+/*
+ * Query parameters that produce a genuinely DISTINCT document and must survive
+ * into the canonical URL.
+ *
+ * `category` is the only one: /apps?category=Games is a different listing with
+ * different content, and it is listed in sitemap.xml -- if the canonical
+ * stripped it, every category page would canonicalise to /apps and Search
+ * Console would report "Alternate page with proper canonical tag" for all of
+ * them, i.e. none would ever be indexed.
+ *
+ * Everything else (sort, price, page, search) only reorders or filters the same
+ * underlying set, so those variants canonicalise to the bare path on purpose --
+ * that is what stops a dozen near-duplicates competing with each other.
+ */
+const CANONICAL_PARAMS = ["category"];
+
+function setRequestUrl(url) {
+  try {
+    const u = new URL(url);
+    SITE_ORIGIN = u.origin;
+    const keep = new URLSearchParams();
+    CANONICAL_PARAMS.forEach((k) => {
+      const v = u.searchParams.get(k);
+      // "All" is the default, so ?category=All IS /apps and must collapse to it.
+      if (v && v !== "All") keep.set(k, v);
+    });
+    const qs = keep.toString();
+    REQUEST_PATH = `${u.pathname || "/"}${qs ? `?${qs}` : ""}`;
+  } catch {
+    SITE_ORIGIN = "";
+    REQUEST_PATH = "/";
+  }
+}
+function siteOrigin() {
+  return SITE_ORIGIN;
+}
+
 function layout(o) {
   const mode = o.mode || "store";
   const nav = mode === "developer" ? NAV_DEV : NAV_STORE;
   const desc = o.description || "Discover, browse and download apps \u2014 the open, developer-first app store.";
+  const fullTitle = `${o.title} \u00b7 ${SITE_NAME}`;
+  // Explicit o.canonical wins (a page that knows it is a duplicate of another
+  // can point at the original); otherwise derive it from the request path.
+  const canonical = o.canonical || (SITE_ORIGIN ? `${SITE_ORIGIN}${REQUEST_PATH}` : "");
+  const ogImage = o.ogImage || (SITE_ORIGIN ? `${SITE_ORIGIN}/static/icon-512.png` : "");
+  /*
+   * Indexing directives.
+   *
+   * Pages pass `noindex: true` for anything transactional or private (auth
+   * screens, the developer console). `follow` is kept even when noindexing so
+   * link equity still flows through to the public pages those screens link to.
+   * `max-image-preview:large` opts into the big thumbnail in search results,
+   * which is what makes an app icon show up next to the listing.
+   */
+  const robots = o.noindex
+    ? "noindex, follow"
+    : "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1";
+  const jsonLd = Array.isArray(o.jsonLd) ? o.jsonLd.filter(Boolean) : o.jsonLd ? [o.jsonLd] : [];
   return html`<!DOCTYPE html>
 <html lang="en" data-mode="${mode}">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta name="theme-color" content="#0b1020" />
-<title>${o.title} · ${SITE_NAME}</title>
+<title>${fullTitle}</title>
 <meta name="description" content="${desc}" />
 ${SITE_VERIFICATION ? raw(`<meta name="google-site-verification" content="${esc(SITE_VERIFICATION)}" />`) : ""}
-<meta property="og:title" content="${o.title} · ${SITE_NAME}" />
+<meta name="robots" content="${robots}" />
+<meta name="googlebot" content="${robots}" />
+${canonical ? raw(`<link rel="canonical" href="${esc(canonical)}" />`) : ""}
+<meta property="og:site_name" content="${SITE_NAME}" />
+<meta property="og:title" content="${fullTitle}" />
 <meta property="og:description" content="${desc}" />
-<meta property="og:type" content="website" />
-${o.ogImage ? raw(`<meta property="og:image" content="${esc(o.ogImage)}" />`) : ""}
-${o.canonical ? raw(`<link rel="canonical" href="${esc(o.canonical)}" />`) : ""}
+<meta property="og:type" content="${o.ogType || "website"}" />
+<meta property="og:locale" content="en_US" />
+${canonical ? raw(`<meta property="og:url" content="${esc(canonical)}" />`) : ""}
+${ogImage ? raw(`<meta property="og:image" content="${esc(ogImage)}" />
+<meta property="og:image:alt" content="${esc(o.title)}" />`) : ""}
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="${fullTitle}" />
+<meta name="twitter:description" content="${desc}" />
+${ogImage ? raw(`<meta name="twitter:image" content="${esc(ogImage)}" />
+<meta name="twitter:image:alt" content="${esc(o.title)}" />`) : ""}
+<meta name="application-name" content="${SITE_NAME}" />
+<meta name="apple-mobile-web-app-title" content="${SITE_NAME}" />
+<meta name="format-detection" content="telephone=no" />
+${jsonLd.length ? raw(jsonLd.map((n) => ldScript(n)).join("\n")) : ""}
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
 <link rel="manifest" href="/manifest.webmanifest" />
@@ -218,5 +302,7 @@ export {
   SITE_NAME,
   esc,
   layout,
-  setSiteVerification
+  setSiteVerification,
+  setRequestUrl,
+  siteOrigin
 };

@@ -63,6 +63,14 @@ function homePage(d) {
   <div class="stat"><i class="fa-solid fa-layer-group"></i><div><strong>${activeCats.length}</strong><small>Live categories</small></div></div>
 </section>
 
+<!-- Personalised row. Ships `hidden` and is REMOVED by the client when there is
+     no browsing history to personalise from, so a first-time visitor never sees
+     an empty "recommended for you" heading. -->
+<section class="section" id="ai-picks" hidden>
+  ${sectionHead("Apps you might like", "Suggested by AI from the apps you have been viewing")}
+  <div id="ai-picks-out"></div>
+</section>
+
 ${hero.length ? `<section class="section" id="featured-section">
   ${sectionHead("Featured this week", "Hand-picked apps worth your home screen", { href: "/apps?sort=rated", label: "See all" })}
   <div class="hero-card-row">${hero.slice(0, 3).map(heroCard).join("")}</div>
@@ -120,6 +128,23 @@ function browsePage(opts) {
     <h1>${search ? `Results for \u201C${esc(search)}\u201D` : category && category !== "All" ? `${esc(category)} apps` : "Browse all apps"}</h1>
     <p id="results-count">${apps.length} ${apps.length === 1 ? "app" : "apps"} found</p>
   </div>
+</section>
+
+<!-- Natural-language search, offered ALONGSIDE the keyword filters rather than
+     replacing them: keyword search is instant and free, this costs a request and
+     a few seconds, so it is opt-in for when plain keywords are the wrong tool. -->
+<section class="ai-search" id="ai-search">
+  <form class="ai-search-form" id="ai-search-form" autocomplete="off">
+    <div class="ai-search-label">
+      <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+      <label for="ai-search-input">Describe what you need and let AI find it</label>
+    </div>
+    <div class="ai-search-row">
+      <input id="ai-search-input" type="text" maxlength="500" placeholder="e.g. I need a photo editor that works offline" />
+      <button class="btn btn-primary" type="submit">Ask AI</button>
+    </div>
+  </form>
+  <div id="ai-search-out" class="ai-search-out"></div>
 </section>
 
 <section class="browse-layout">
@@ -388,6 +413,20 @@ function appDetailPage(d) {
           <p class="form-note">You need to be signed in to post a review.</p>
         </form>
       </details>
+    </div>
+
+    <!-- One side of the comparison is fixed to the app being viewed: it is the
+         common case, and it removes a whole class of user error since there is
+         only one thing left to choose. Alternatives are drawn from the same
+         category first, because those are the real competitors. -->
+    <div class="card" id="ai-compare" data-slug="${esc(app.slug)}" data-category="${esc(app.category)}">
+      <h2 class="card-title"><i class="fa-solid fa-code-compare"></i> Compare with another app</h2>
+      <div class="ai-cmp-controls">
+        <label class="sr-only" for="ai-compare-with">Compare ${esc(app.name)} with</label>
+        <select id="ai-compare-with" class="ai-cmp-select"><option value="">Loading apps\u2026</option></select>
+        <button class="btn btn-outline" id="ai-compare-go" type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> Compare</button>
+      </div>
+      <div id="ai-compare-out" class="ai-cmp-out"></div>
     </div>
 
     ${similar.length ? `<div class="card">
