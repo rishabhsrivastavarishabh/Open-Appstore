@@ -63,9 +63,9 @@ function homePage(d) {
   <div class="stat"><i class="fa-solid fa-layer-group"></i><div><strong>${activeCats.length}</strong><small>Live categories</small></div></div>
 </section>
 
-<!-- Personalised row. Ships `hidden` and is REMOVED by the client when there is
-     no browsing history to personalise from, so a first-time visitor never sees
-     an empty "recommended for you" heading. -->
+<!-- Personalised row. Ships with the hidden attribute and is REMOVED by the
+     client when there is no browsing history to personalise from, so a
+     first-time visitor never sees an empty "recommended for you" heading. -->
 <section class="section" id="ai-picks" hidden>
   ${sectionHead("Apps you might like", "Suggested by AI from the apps you have been viewing")}
   <div id="ai-picks-out"></div>

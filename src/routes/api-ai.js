@@ -319,12 +319,15 @@ ai.get("/ai/context", async (c) => {
  * Body: { prompt }
  */
 ai.post("/ai/ask", async (c) => {
-  const { err, user } = await gate(c);
-  if (err) return err;
-
+  // Input is validated BEFORE the rate limiter runs. Validation is free -- it
+  // costs no AI call -- so charging a request for an empty textbox would punish
+  // a user for a typo and burn a slot of their 3/min budget on nothing.
   const body = await c.req.json().catch(() => ({}));
   const prompt = String(body.prompt || "").trim().slice(0, MAX_PROMPT_CHARS);
   if (!prompt) return fail(c, 422, "Type a question first.", "validation_failed");
+
+  const { err, user } = await gate(c);
+  if (err) return err;
 
   const apps = await catalogue(c.env);
   const { text, error, status } = await complete(
@@ -356,14 +359,15 @@ ai.post("/ai/ask", async (c) => {
  * description is the most common reason a good app does not get installed.
  */
 ai.post("/ai/listing", async (c) => {
-  const { err } = await gate(c);
-  if (err) return err;
-
+  // Validate before charging the limiter (see /ai/ask).
   const body = await c.req.json().catch(() => ({}));
   const name = String(body.app_name || "").trim().slice(0, 120);
   const category = String(body.category || "").trim().slice(0, 60);
   const notes = String(body.notes || "").trim().slice(0, MAX_PROMPT_CHARS);
   if (!name) return fail(c, 422, "An app name is required.", "validation_failed");
+
+  const { err } = await gate(c);
+  if (err) return err;
 
   const { text, error, status } = await complete(
     c.env,
@@ -428,12 +432,13 @@ function hydrate(recs, apps) {
  * Returns ranked recommendations, each with the AI's reason.
  */
 ai.post("/ai/search", async (c) => {
-  const { err } = await visitorGate(c);
-  if (err) return err;
-
+  // Validate before charging the limiter (see /ai/ask).
   const body = await c.req.json().catch(() => ({}));
   const query = String(body.query || "").trim().slice(0, MAX_PROMPT_CHARS);
   if (!query) return fail(c, 422, "Type what you are looking for.", "validation_failed");
+
+  const { err } = await visitorGate(c);
+  if (err) return err;
 
   const apps = await catalogue(c.env);
   if (!apps.length) return c.json({ success: true, data: { query, results: [], note: "The catalogue is empty." } });
@@ -474,9 +479,7 @@ ai.post("/ai/search", async (c) => {
  * is never stored anywhere.
  */
 ai.post("/ai/chat", async (c) => {
-  const { err } = await visitorGate(c);
-  if (err) return err;
-
+  // Validate before charging the limiter (see /ai/ask).
   const body = await c.req.json().catch(() => ({}));
   const history = Array.isArray(body.messages) ? body.messages : [];
   // Only the last few turns: enough for context, bounded for cost.
@@ -487,6 +490,9 @@ ai.post("/ai/chat", async (c) => {
   if (!turns.length || turns[turns.length - 1].role !== "user") {
     return fail(c, 422, "Type a message first.", "validation_failed");
   }
+
+  const { err } = await visitorGate(c);
+  if (err) return err;
 
   const apps = await catalogue(c.env);
   const { text, error, status } = await complete(
@@ -517,14 +523,15 @@ ai.post("/ai/chat", async (c) => {
  * so the comparison is always grounded in real listing data.
  */
 ai.post("/ai/compare", async (c) => {
-  const { err } = await visitorGate(c);
-  if (err) return err;
-
+  // Validate before charging the limiter (see /ai/ask).
   const body = await c.req.json().catch(() => ({}));
   const slugA = String(body.a || "").trim().slice(0, 120);
   const slugB = String(body.b || "").trim().slice(0, 120);
   if (!slugA || !slugB) return fail(c, 422, "Pick two apps to compare.", "validation_failed");
   if (slugA === slugB) return fail(c, 422, "Pick two different apps.", "validation_failed");
+
+  const { err } = await visitorGate(c);
+  if (err) return err;
 
   const fields =
     "select=app_slug,app_name,category,description,icon_url,rating,total_reviews,total_downloads,is_free,price,current_version";
@@ -605,9 +612,9 @@ ai.post("/ai/compare", async (c) => {
  * fake "personalised" row is worse than none.
  */
 ai.post("/ai/picks", async (c) => {
-  const { err } = await visitorGate(c);
-  if (err) return err;
-
+  // Validated (and the no-signal case answered) before charging the limiter:
+  // this endpoint fires automatically on page load, so a visitor with no
+  // browsing history must not silently spend a slot of their 3/min budget.
   const body = await c.req.json().catch(() => ({}));
   const clean = (v) =>
     (Array.isArray(v) ? v : [])
@@ -621,6 +628,9 @@ ai.post("/ai/picks", async (c) => {
   if (!recent.length && !installed.length && !cats.length) {
     return c.json({ success: true, data: { results: [], note: "Not enough activity yet." } });
   }
+
+  const { err } = await visitorGate(c);
+  if (err) return err;
 
   const apps = await catalogue(c.env);
   // Never recommend something the visitor already has.

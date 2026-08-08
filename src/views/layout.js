@@ -63,6 +63,24 @@ let REQUEST_PATH = "/";
  */
 const CANONICAL_PARAMS = ["category"];
 
+/*
+ * Path prefixes that must never be indexed, mirroring robots.txt.
+ *
+ * Derived from the path rather than passed per route on purpose: there are 13
+ * developer-console routes and 5 auth routes, and the whole point is that a
+ * NEW private page added later is noindex by default instead of depending on
+ * whoever adds it remembering the flag.
+ *
+ * robots.txt Disallow alone is NOT sufficient: a disallowed URL can still be
+ * indexed (without a snippet) if something links to it, because the crawler
+ * never fetches the page to see the directive. Belt and braces -- the meta tag
+ * here is what actually keeps it out of the index.
+ */
+const NOINDEX_PREFIXES = ["/developer", "/auth"];
+function pathIsPrivate(path) {
+  return NOINDEX_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+}
+
 function setRequestUrl(url) {
   try {
     const u = new URL(url);
@@ -102,7 +120,7 @@ function layout(o) {
    * `max-image-preview:large` opts into the big thumbnail in search results,
    * which is what makes an app icon show up next to the listing.
    */
-  const robots = o.noindex
+  const robots = o.noindex || pathIsPrivate(REQUEST_PATH)
     ? "noindex, follow"
     : "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1";
   const jsonLd = Array.isArray(o.jsonLd) ? o.jsonLd.filter(Boolean) : o.jsonLd ? [o.jsonLd] : [];
@@ -272,8 +290,9 @@ ${o.body}
 
 <!-- Floating AI assistant. Rendered on every page from the layout so it is
      reachable from anywhere, per spec. The panel ships collapsed and inert:
-     `hidden` keeps it out of the accessibility tree until opened, and no AI
-     request is made until the visitor actually sends a message. -->
+     the hidden attribute keeps it out of the accessibility tree until opened,
+     and no AI request is made until the visitor actually sends a message.
+     (No backticks in this comment: it sits inside a template literal.) -->
 <div id="ai-widget" class="ai-widget" data-open="false">
   <button id="ai-widget-toggle" class="ai-fab" type="button" aria-expanded="false" aria-controls="ai-widget-panel" aria-label="Open AI assistant">
     <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>

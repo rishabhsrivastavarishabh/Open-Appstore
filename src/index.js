@@ -131,92 +131,92 @@ app.on("GET", ["/manifest.webmanifest", "/manifest.json"], (c) => {
     })
   );
 });
+/*
+ * robots.txt
+ *
+ * Generated rather than served as a static file so the Sitemap: line always
+ * carries the CURRENT origin -- a hardcoded one would point preview
+ * deployments at production and confuse crawling of both.
+ */
 app.get("/robots.txt", (c) => {
-  const origin = new URL(c.req.url).origin;
   c.header("Content-Type", "text/plain; charset=utf-8");
   c.header("Cache-Control", "public, max-age=86400");
-  return c.body(`# Open Appstore
-User-agent: *
-Allow: /
-Allow: /apps
-Allow: /app/
-Allow: /categories
-Allow: /top-charts
-Allow: /developers
-
-# Private / non-indexable areas
-Disallow: /developer
-Disallow: /developer/
-Disallow: /auth/
-Disallow: /api/
-
-# Crawl-delay keeps aggressive bots from hammering the edge worker
-User-agent: AhrefsBot
-Crawl-delay: 10
-
-User-agent: SemrushBot
-Crawl-delay: 10
-
-Sitemap: ${origin}/sitemap.xml
-`);
+  return c.body(robotsTxt(new URL(c.req.url).origin));
 });
 
-/** XML sitemap generated live from published apps, categories and developers. */
+/**
+ * XML sitemap, generated live from published apps, categories and developers.
+ *
+ * Live generation means a newly published app is discoverable on the next crawl
+ * with no build step or manual resubmission. Search Console reads this file
+ * directly once the property is verified.
+ */
 app.get("/sitemap.xml", async (c) => {
   const origin = new URL(c.req.url).origin;
-  const iso = (d) => new Date(d || Date.now()).toISOString().slice(0, 10);
-
-  const [appsRes, catsRes, devsRes] = await Promise.all([
-    sbSelect(c.env, "apps", "select=app_slug,updated_at,created_at,icon_url,app_name&status=eq.published&limit=1000"),
-    sbSelect(c.env, "apps", "select=category&status=eq.published&limit=1000"),
-    sbSelect(c.env, "developers", "select=id,updated_at&limit=500")
+  const [appsRes, devsRes] = await Promise.all([
+    sbSelect(
+      c.env,
+      "apps",
+      "select=app_slug,app_name,category,updated_at,created_at,icon_url&status=eq.published&order=total_downloads.desc&limit=1000"
+    ),
+    sbSelect(c.env, "developers", "select=id,updated_at,created_at&limit=500")
   ]);
+  const apps = appsRes.data || [];
+  const now = new Date().toISOString();
 
-  const url = (loc, lastmod, changefreq, priority, extra = "") =>
-    `  <url>\n    <loc>${origin}${loc}</loc>\n` +
-    (lastmod ? `    <lastmod>${lastmod}</lastmod>\n` : "") +
-    `    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n${extra}  </url>`;
-
-  const parts = [
-    url("/", iso(), "daily", "1.0"),
-    url("/apps", iso(), "daily", "0.9"),
-    url("/top-charts", iso(), "daily", "0.9"),
-    url("/categories", iso(), "weekly", "0.8"),
-    url("/developers", iso(), "weekly", "0.7"),
-    url("/legal/privacy", null, "yearly", "0.3"),
-    url("/legal/terms", null, "yearly", "0.3"),
-    url("/legal/guidelines", null, "yearly", "0.3")
+  const entries = [
+    { path: "/", lastmod: now, changefreq: "daily", priority: "1.0" },
+    { path: "/apps", lastmod: now, changefreq: "daily", priority: "0.9" },
+    { path: "/top-charts", lastmod: now, changefreq: "daily", priority: "0.9" },
+    { path: "/categories", lastmod: now, changefreq: "weekly", priority: "0.8" },
+    { path: "/developers", lastmod: now, changefreq: "weekly", priority: "0.7" },
+    { path: "/legal/privacy", changefreq: "yearly", priority: "0.3" },
+    { path: "/legal/terms", changefreq: "yearly", priority: "0.3" },
+    { path: "/legal/guidelines", changefreq: "yearly", priority: "0.4" }
   ];
 
-  // Category listing pages
+  // Category listings. Only categories that actually HAVE published apps are
+  // listed: a URL that renders an empty result set is a soft-404 to Google and
+  // drags down the crawl quality of everything around it.
   const seen = new Set();
-  (catsRes.data || []).forEach((r) => {
-    const cat = r.category || "Other";
+  apps.forEach((a) => {
+    const cat = a.category || "Other";
     if (seen.has(cat)) return;
     seen.add(cat);
-    parts.push(url(`/apps?category=${encodeURIComponent(cat)}`, null, "weekly", "0.6"));
+    entries.push({
+      path: `/apps?category=${encodeURIComponent(cat)}`,
+      changefreq: "weekly",
+      priority: "0.6"
+    });
   });
 
-  // App detail pages, with an image entry so Google can index the icon
-  (appsRes.data || []).forEach((a) => {
+  // App detail pages, each with its icon declared via the image extension.
+  apps.forEach((a) => {
     if (!a.app_slug) return;
     const icon = normalizeImageUrl(a.icon_url, 512);
-    const image = icon
-      ? `    <image:image>\n      <image:loc>${esc(icon)}</image:loc>\n      <image:title>${esc(a.app_name || a.app_slug)}</image:title>\n    </image:image>\n`
-      : "";
-    parts.push(url(`/app/${encodeURIComponent(a.app_slug)}`, iso(a.updated_at || a.created_at), "weekly", "0.8", image));
+    entries.push({
+      path: `/app/${encodeURIComponent(a.app_slug)}`,
+      lastmod: a.updated_at || a.created_at,
+      changefreq: "weekly",
+      priority: "0.8",
+      ...(icon ? { image: icon, imageTitle: a.app_name || a.app_slug } : {})
+    });
   });
 
-  // Public developer profiles
+  // Public developer profiles.
   (devsRes.data || []).forEach((d) => {
-    parts.push(url(`/developer-profile/${d.id}`, iso(d.updated_at), "monthly", "0.5"));
+    if (!d.id) return;
+    entries.push({
+      path: `/developer-profile/${d.id}`,
+      lastmod: d.updated_at || d.created_at,
+      changefreq: "monthly",
+      priority: "0.5"
+    });
   });
-
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n${parts.join("\n")}\n</urlset>\n`;
 
   c.header("Content-Type", "application/xml; charset=utf-8");
   c.header("Cache-Control", "public, max-age=3600");
-  return c.body(xml);
+  return c.body(sitemapXml(origin, entries));
 });
 async function fetchApps(env, query) {
   const { data } = await sbSelect(env, "apps", query);
@@ -304,8 +304,31 @@ app.get("/apps", async (c) => {
   return c.html(
     layout({
       title: search ? `Search: ${search}` : category !== "All" ? `${category} apps` : "Browse apps",
-      description: `Browse ${apps.length} apps on Open Appstore.`,
+      description: search
+        ? `Search results for \u201c${search}\u201d on Open Appstore.`
+        : category !== "All"
+          ? `Browse ${apps.length} ${category} apps on Open Appstore \u2014 ratings, downloads and screenshots for every listing.`
+          : `Browse all ${apps.length} apps on Open Appstore \u2014 filter by category, price and rating.`,
       active: "apps",
+      // Search-result URLs are infinite in number and near-duplicates of the
+      // plain listing; indexing them burns crawl budget that should go to app
+      // pages. Category pages ARE indexable (they are in sitemap.xml).
+      noindex: Boolean(search),
+      jsonLd: [
+        breadcrumbLd(new URL(c.req.url).origin, [
+          { name: "Home", path: "/" },
+          { name: "Browse apps", path: "/apps" },
+          ...(category !== "All"
+            ? [{ name: category, path: `/apps?category=${encodeURIComponent(category)}` }]
+            : [])
+        ]),
+        itemListLd(
+          new URL(c.req.url).origin,
+          category !== "All" ? `${category} apps` : "All apps on Open Appstore",
+          apps,
+          30
+        )
+      ],
       body: browsePage({ apps, categories, search, category, sort, price }),
       bootstrap: { page: "browse", search, category, sort, price }
     })
@@ -316,8 +339,20 @@ app.get("/categories", async (c) => {
   return c.html(
     layout({
       title: "Categories",
-      description: "Browse apps by category on Open Appstore.",
+      description: `Browse apps by category on Open Appstore \u2014 ${categories.filter((x) => x.count > 0).length} live categories across games, productivity, tools and more.`,
       active: "categories",
+      jsonLd: [
+        collectionLd(
+          new URL(c.req.url).origin,
+          "/categories",
+          "App categories",
+          "Every app category available on Open Appstore."
+        ),
+        breadcrumbLd(new URL(c.req.url).origin, [
+          { name: "Home", path: "/" },
+          { name: "Categories", path: "/categories" }
+        ])
+      ],
       body: categoriesPage(categories),
       bootstrap: { page: "categories" }
     })
@@ -334,8 +369,15 @@ app.get("/top-charts", async (c) => {
   return c.html(
     layout({
       title: "Top charts",
-      description: "Most downloaded, top rated and newest apps on Open Appstore.",
+      description: "Most downloaded, top rated and newest apps on Open Appstore \u2014 updated continuously from real download and review counts.",
       active: "charts",
+      jsonLd: [
+        breadcrumbLd(new URL(c.req.url).origin, [
+          { name: "Home", path: "/" },
+          { name: "Top charts", path: "/top-charts" }
+        ]),
+        itemListLd(new URL(c.req.url).origin, "Most downloaded apps", popular, 25)
+      ],
       body: chartsPage({ popular, topRated, newest, free }),
       bootstrap: { page: "charts" }
     })
@@ -386,9 +428,25 @@ app.get("/app/:slug", async (c) => {
   return c.html(
     layout({
       title: app_.name,
-      description: app_.short_description || `${app_.name} on Open Appstore`,
+      // A description that names the developer, category and version gives the
+      // snippet real substance instead of repeating the title.
+      description: app_.short_description
+        ? `${app_.short_description}`
+        : `Download ${app_.name}${(devRes.data || [])[0]?.name ? ` by ${(devRes.data || [])[0].name}` : ""} \u2014 ${app_.category} app, version ${app_.version}, on Open Appstore.`,
       ogImage: app_.icon_url || void 0,
+      // og:type product is what unlocks the richer preview card on social
+      // platforms for something that has a price and availability.
+      ogType: "product",
       active: "apps",
+      jsonLd: [
+        appLd(new URL(c.req.url).origin, app_, (devRes.data || [])[0] || null),
+        breadcrumbLd(new URL(c.req.url).origin, [
+          { name: "Home", path: "/" },
+          { name: "Browse apps", path: "/apps" },
+          { name: app_.category, path: `/apps?category=${encodeURIComponent(app_.category)}` },
+          { name: app_.name, path: `/app/${app_.slug || app_.id}` }
+        ])
+      ],
       body: appDetailPage({
         origin: new URL(c.req.url).origin,
         packageName: PACKAGE_NAME,
@@ -429,8 +487,20 @@ app.get("/developers", async (c) => {
   return c.html(
     layout({
       title: "Developers",
-      description: "Studios and independent developers publishing on Open Appstore.",
+      description: `Studios and independent developers publishing on Open Appstore \u2014 ${devs.length} profiles with their published apps and download totals.`,
       active: "developers",
+      jsonLd: [
+        collectionLd(
+          new URL(c.req.url).origin,
+          "/developers",
+          "Developers on Open Appstore",
+          "Studios and independent developers publishing on Open Appstore."
+        ),
+        breadcrumbLd(new URL(c.req.url).origin, [
+          { name: "Home", path: "/" },
+          { name: "Developers", path: "/developers" }
+        ])
+      ],
       body: developersPage(devs),
       bootstrap: { page: "developers" }
     })
@@ -457,8 +527,29 @@ app.get("/developer-profile/:id", async (c) => {
   return c.html(
     layout({
       title: developer.developer_name,
-      description: developer.description || `Apps by ${developer.developer_name} on Open Appstore.`,
+      description: developer.description || `Apps by ${developer.developer_name} on Open Appstore \u2014 ${apps.length} published ${apps.length === 1 ? "app" : "apps"}.`,
+      // `avatar_url` is the real column on `developers` (verified against
+      // DEV_SELECT in lib/types.js) -- there is no logo_url.
+      ogImage: developer.avatar_url || void 0,
+      ogType: "profile",
       active: "developers",
+      jsonLd: [
+        {
+          "@context": "https://schema.org",
+          "@type": "Organization",
+          name: developer.developer_name,
+          url: `${new URL(c.req.url).origin}/developer-profile/${developer.id}`,
+          ...(developer.description ? { description: developer.description } : {}),
+          ...(developer.avatar_url ? { logo: developer.avatar_url } : {}),
+          ...(developer.website ? { sameAs: [developer.website] } : {})
+        },
+        itemListLd(new URL(c.req.url).origin, `Apps by ${developer.developer_name}`, apps, 30),
+        breadcrumbLd(new URL(c.req.url).origin, [
+          { name: "Home", path: "/" },
+          { name: "Developers", path: "/developers" },
+          { name: developer.developer_name, path: `/developer-profile/${developer.id}` }
+        ])
+      ],
       body: developerProfilePage({ developer, apps }),
       bootstrap: { page: "developer-profile", developerId: id }
     })
@@ -601,6 +692,13 @@ app.get(
   (c) => c.html(
     layout({
       title: "Privacy Policy",
+      description: "How Open Appstore collects, uses and stores your data \u2014 account details, app listing metadata, and the processors involved.",
+      jsonLd: webPageLd(
+        new URL(c.req.url).origin,
+        "/legal/privacy",
+        "Privacy Policy",
+        "How Open Appstore collects, uses and stores your data."
+      ),
       body: legalPage("Privacy Policy", [
         {
           h: "What we collect",
@@ -639,6 +737,13 @@ app.get(
   (c) => c.html(
     layout({
       title: "Terms of Service",
+      description: "The terms covering use of Open Appstore \u2014 browsing, publishing apps, downloads and account responsibilities.",
+      jsonLd: webPageLd(
+        new URL(c.req.url).origin,
+        "/legal/terms",
+        "Terms of Service",
+        "The terms covering use of Open Appstore."
+      ),
       body: legalPage("Terms of Service", [
         {
           h: "Using the store",
@@ -677,6 +782,13 @@ app.get(
   (c) => c.html(
     layout({
       title: "Developer Guidelines",
+      description: "Listing quality rules for publishing on Open Appstore \u2014 icons, screenshots, descriptions, versioning and what gets rejected.",
+      jsonLd: webPageLd(
+        new URL(c.req.url).origin,
+        "/legal/guidelines",
+        "Developer Guidelines",
+        "Listing quality rules for publishing on Open Appstore."
+      ),
       body: legalPage("Developer Guidelines", [
         {
           h: "Listing quality",
@@ -715,6 +827,10 @@ function notFound(c, opts = {}) {
   return c.html(
     layout({
       title: opts.title || "Not found",
+      // A 404 body must never be indexed. The 404 status alone usually keeps it
+      // out, but an unpublished app URL that still has inbound links is exactly
+      // the case where the explicit directive matters.
+      noindex: true,
       body: raw(`
 <section class="error-page error-page-art">
   ${notFoundArt("notfound-art notfound-art-lg")}
