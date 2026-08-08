@@ -137,6 +137,24 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 `GET/POST /api/developer/apps/:id/versions`, `GET/PUT /api/developer/profile`,
 `POST /api/developer/register`, `GET /api/developer/stats`.
 
+### AI assistant
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/ai` | `{ available, model, limit_per_hour, endpoints }` — public, so the UI can hide the feature when it is unconfigured |
+| POST | `/api/ai/listing` 🔒 | `{ app_name, category?, notes? }` → `{ tagline, description, features[] }` |
+| POST | `/api/ai/ask` 🔒 | `{ prompt }` → an answer grounded on the published catalogue |
+
+Backed by **OpenRouter** (`openai/gpt-4o-mini`) through a server-side proxy.
+
+- The API key lives **only** in the `OPENROUTER_API_KEY` secret. It is never imported into any
+  browser bundle — verified with `grep -c "sk-or-v1" dist/_worker.js public/static/app.js` → `0 0`.
+- A pinned model is used rather than `openrouter/auto`, because `auto` is free to route a request
+  to a far more expensive model while the account owner pays for it.
+- **Sign-in is required** even though nothing here is private: every call spends real credit, so an
+  anonymous endpoint would let a stranger drain the balance.
+- AI calls get their own `ai` rate-limit tier of **20/hour per user**, far tighter than the
+  1000/hour data tier, for the same reason.
+
 ---
 
 ## 4. Data architecture
@@ -244,19 +262,44 @@ npx wrangler pages deploy dist --project-name openappstore --branch main
 
 ### Environment secrets
 
-All five values are Cloudflare Pages **secrets**, never `vars` in `wrangler.jsonc`:
+All values are Cloudflare Pages **secrets**, never `vars` in `wrangler.jsonc`:
 
 `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `STORE_ID`,
-`AUTH_CHALLENGE_SECRET`
+`AUTH_CHALLENGE_SECRET`, `OPENROUTER_API_KEY`, and optionally
+`GOOGLE_SITE_VERIFICATION` / `GOOGLE_SITE_VERIFICATION_FILE`.
 
-⚠️ Two traps worth remembering:
+**Always push them with the helper**, which reads `.dev.vars` and sends every value explicitly:
+
+```bash
+node scripts/cf-secrets.mjs          # dry run, prints value lengths
+node scripts/cf-secrets.mjs --push   # write, then redeploy for them to take effect
+```
+
+⚠️ Three traps, all of which have actually bitten this project:
 
 1. **Never declare these in `wrangler.jsonc` `vars`.** A `vars` entry plus a secret of the same
    name makes Pages reject the deploy with `Binding name '<NAME>' already in use` (exit code 1).
 2. **`wrangler pages secret put` replaces the whole env-var map, it does not merge.** Setting them
-   one at a time leaves only the last one bound. Set them together — either in the dashboard, or
-   with a single `PATCH` to `deployment_configs.production.env_vars` on the Pages project API.
-   A missing `SUPABASE_URL` shows up at runtime as `Invalid URL: undefined/rest/v1/...`.
+   one at a time leaves only the last one bound.
+3. **Do not GET the project, merge one key, and PATCH the result back.** This looks like the correct
+   fix for trap 2 and is in fact worse. Cloudflare returns `secret_text` entries with the `value`
+   **stripped**, so echoing that map back writes **empty strings** over every existing secret. The
+   API still answers `"success": true`, and a check that compares only key *names* sees all keys
+   present and reports success — while production is broken. A blanked `SUPABASE_URL` surfaces as
+   `Invalid URL: /rest/v1/...` on every data route. Verify by round-tripping the live site
+   (`curl -s https://openappstore.pages.dev/api/apps?limit=1`), never by counting keys.
+
+### Google Search Console verification
+
+⚠️ **The DNS/CNAME method cannot be used for a `pages.dev` site.** Cloudflare owns the `pages.dev`
+zone, so no CNAME can be added under it (`dig +short NS pages.dev` returns nothing delegable).
+Search Console's DNS tab only becomes usable once `openappstore.openflip.in` is bound. Use either
+supported method below instead — both keep the token in a secret, out of git:
+
+| Method | Setup |
+| --- | --- |
+| **HTML tag** (recommended) | Search Console → *HTML tag*, copy the `content="…"` value → set `GOOGLE_SITE_VERIFICATION` → redeploy. Middleware injects the `<meta>` on **every** page, so any URL of the property verifies and a newly added page can never ship unverified. |
+| **HTML file** | Search Console → *HTML file*, note the `google<token>.html` filename → set `GOOGLE_SITE_VERIFICATION_FILE` to that exact filename → redeploy. Only the configured filename responds; every other `google*.html` 404s, so the endpoint cannot confirm a guessed token. |
 
 ### Custom domain
 
@@ -283,6 +326,10 @@ Cloudflare Worker, so DNS for the subdomain has to point at Cloudflare Pages.
 ---
 
 ## 9. Not implemented yet
+
+- The redesign prompts (home-page gradient restyle, app-details restyle, `/app/{slug}` URL
+  restructure, email-OTP signup flow) are **not** built. Note the OTP flow conflicts with the
+  earlier deliberate removal of email-OTP login, so it needs a decision before implementation.
 
 - User-facing library page for `user_installed_apps` (data is seeded, UI pending)
 - In-app notifications UI (`notifications` table unused)
