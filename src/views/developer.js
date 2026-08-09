@@ -426,13 +426,39 @@ function authPage(mode, providers) {
     ${oauthBlock(providers, mode)}
 
     <form id="auth-form" class="auth-form" data-mode="${mode}">
-      ${mode === "signup" ? `<label class="field"><span>Developer / display name</span><input name="developer_name" placeholder="Tech Studio" autocomplete="organization" /></label>` : ""}
+      ${mode === "signup" ? `<label class="field"><span>Company / developer name *</span><input name="developer_name" placeholder="Tech Studio" autocomplete="organization" required minlength="3" maxlength="100" /><small class="muted">3\u2013100 characters. Shown on your listings.</small></label>` : ""}
       <label class="field"><span>Email address *</span><input name="email" type="email" required autocomplete="email" placeholder="you@example.com" /></label>
+      ${mode === "signup" ? `<label class="field"><span>Phone number <small class="muted">(optional)</small></span><input name="phone" type="tel" autocomplete="tel" placeholder="+91 98765 43210" /></label>
+
+      <fieldset class="field auth-fieldset">
+        <legend>Developer type</legend>
+        <div class="radio-row">
+          <label class="radio"><input type="radio" name="developer_type" value="individual" checked /> <span>Individual</span></label>
+          <label class="radio"><input type="radio" name="developer_type" value="company" /> <span>Company</span></label>
+        </div>
+      </fieldset>` : ""}
       ${mode !== "reset" ? `<label class="field"><span>Password *</span>
         <span class="password-wrap">
           <input name="password" type="password" required minlength="8" autocomplete="${mode === "signup" ? "new-password" : "current-password"}" placeholder="At least 8 characters" />
           <button type="button" class="icon-btn password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
-        </span></label>` : ""}
+        </span>${mode === "signup" ? `
+        <span class="pw-meter" id="pw-meter" hidden>
+          <span class="pw-meter-track"><span class="pw-meter-fill" id="pw-meter-fill"></span></span>
+          <small class="pw-meter-label" id="pw-meter-label" aria-live="polite"></small>
+        </span>` : ""}</label>` : ""}
+      ${mode === "signup" ? `<label class="field"><span>Confirm password *</span>
+        <span class="password-wrap">
+          <input name="password_confirm" type="password" required minlength="8" autocomplete="new-password" placeholder="Re-enter your password" />
+          <button type="button" class="icon-btn password-toggle" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+        </span>
+        <small class="field-error" id="pw-match-error" hidden>Passwords do not match.</small></label>
+
+      <div class="auth-consents">
+        <label class="checkbox"><input type="checkbox" name="agree_terms" required /> <span>I agree to the <a href="/legal/terms" target="_blank" rel="noopener">Terms of Service</a> *</span></label>
+        <label class="checkbox"><input type="checkbox" name="agree_privacy" required /> <span>I have read the <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Policy</a> *</span></label>
+        <label class="checkbox"><input type="checkbox" name="marketing_opt_in" /> <span>Send me occasional product news <small class="muted">(optional)</small></span></label>
+      </div>` : ""}
+      ${mode === "login" ? `<label class="checkbox auth-remember"><input type="checkbox" name="remember" checked /> <span>Keep me signed in on this device</span></label>` : ""}
       <button class="btn btn-primary btn-block btn-lg" type="submit">
         <i class="fa-solid ${mode === "login" ? "fa-right-to-bracket" : mode === "signup" ? "fa-user-plus" : "fa-key"}"></i>
         ${mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}
@@ -552,6 +578,17 @@ ${authGate("Sign in to manage security", "Two-factor authentication and sign-in 
         <div id="tfa-on" hidden>
           <p class="tfa-on-note"><i class="fa-solid fa-circle-check"></i> Every sign-in now asks for a code from your authenticator app.</p>
           <p class="muted" id="tfa-codes-left"></p>
+
+          <form id="tfa-regen-form" class="tfa-confirm">
+            <label class="field">
+              <span>Regenerate backup codes \u2014 enter a current authenticator code</span>
+              <input id="tfa-regen-code" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" required />
+              <small class="muted">Issues 10 fresh codes and invalidates the old ones. Your authenticator app keeps working.</small>
+            </label>
+            <button class="btn btn-outline" type="submit"><i class="fa-solid fa-rotate"></i> Regenerate codes</button>
+          </form>
+          <p class="auth-alert" id="tfa-regen-alert" hidden></p>
+
           <form id="tfa-disable-form" class="tfa-confirm">
             <label class="field">
               <span>Turn it off \u2014 enter a current code or a backup code</span>

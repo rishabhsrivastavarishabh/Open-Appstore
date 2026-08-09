@@ -24,6 +24,7 @@ import {
   itemListLd,
   collectionLd,
   webPageLd,
+  organizationLd,
   robotsTxt,
   sitemapXml
 } from "./lib/seo.js";
@@ -169,6 +170,7 @@ app.get("/sitemap.xml", async (c) => {
     { path: "/top-charts", lastmod: now, changefreq: "daily", priority: "0.9" },
     { path: "/categories", lastmod: now, changefreq: "weekly", priority: "0.8" },
     { path: "/developers", lastmod: now, changefreq: "weekly", priority: "0.7" },
+    { path: "/about", changefreq: "monthly", priority: "0.5" },
     { path: "/legal/privacy", changefreq: "yearly", priority: "0.3" },
     { path: "/legal/terms", changefreq: "yearly", priority: "0.3" },
     { path: "/legal/guidelines", changefreq: "yearly", priority: "0.4" }
@@ -654,10 +656,33 @@ app.get(
     })
   )
 );
+/*
+ * Auth page routes.
+ *
+ * The canonical paths are /auth/*. The /developer/* and alternate spellings are
+ * aliases serving the SAME page, because they were linked from elsewhere (and
+ * requested by name) but previously 404'd. Publishing one account system under
+ * several URLs is deliberate: this store has a single identity per person, and
+ * "developer" is a role that account gains after registering a studio profile,
+ * not a separate credential store. Two parallel login systems would mean two
+ * password resets and two 2FA enrolments for the same human.
+ *
+ * All of these are noindex via NOINDEX_PREFIXES ("/auth", "/developer"), so the
+ * duplicate URLs cannot create a duplicate-content problem in Search Console.
+ */
 for (const [path, mode] of [
   ["/auth/login", "login"],
   ["/auth/signup", "signup"],
-  ["/auth/reset", "reset"]
+  ["/auth/reset", "reset"],
+  // Aliases — same pages, alternate URLs.
+  ["/auth/signin", "login"],
+  ["/auth/register", "signup"],
+  ["/auth/forgot-password", "reset"],
+  ["/developer/signin", "login"],
+  ["/developer/login", "login"],
+  ["/developer/register", "signup"],
+  ["/developer/signup", "signup"],
+  ["/developer/forgot-password", "reset"]
 ]) {
   app.get(path, async (c) => {
     // Awaited so the social buttons are in the first-paint HTML rather than
@@ -674,6 +699,73 @@ for (const [path, mode] of [
     );
   });
 }
+/**
+ * /about — company and contact page.
+ *
+ * Uses the same prose shell as the legal pages so the typography and print
+ * behaviour stay consistent. The contact address is the real support inbox
+ * (appstore@openflip.in) and is also emitted as structured data via
+ * organizationLd, so search engines can attach it to the Organization entity
+ * rather than treating it as loose page text.
+ */
+app.get(
+  "/about",
+  (c) => {
+    const origin = new URL(c.req.url).origin;
+    return c.html(
+      layout({
+        title: "About",
+        description:
+          "About Open Appstore \u2014 an independent app store where developers publish directly to users. Learn who runs it, how it works, and how to get in touch.",
+        jsonLd: [
+          webPageLd(origin, "/about", "About Open Appstore", "Who runs Open Appstore, how it works, and how to contact us."),
+          organizationLd(origin),
+          breadcrumbLd(origin, [
+            { name: "Home", path: "/" },
+            { name: "About", path: "/about" }
+          ])
+        ],
+        body: legalPage("About Open Appstore", [
+          {
+            h: "What Open Appstore is",
+            p: [
+              "Open Appstore is an independent app store. Developers publish their apps directly to the catalogue, and visitors can browse, search and download without an account.",
+              "Every listing is submitted by the developer who owns it. We do not repackage, re-sign or mirror apps from anywhere else \u2014 what you download is the file the developer uploaded."
+            ]
+          },
+          {
+            h: "Who runs it",
+            p: [
+              "Open Appstore is operated by Open Media Intelligence. The store, the developer console and the review system are built and maintained by the same small team.",
+              "The catalogue is deliberately curated rather than automated: listings are checked against our developer guidelines before they go live."
+            ]
+          },
+          {
+            h: "Sarath, our AI app guide",
+            p: [
+              "Sarath is the AI assistant built into the store. It answers questions in plain language \u2014 \u201cI need a photo editor\u201d, \u201ccompare these two apps\u201d \u2014 and recommends listings from the live catalogue.",
+              "Sarath only ever answers from apps that are actually published here. It is not a general-purpose chatbot, and it cannot recommend apps that do not exist in the catalogue."
+            ]
+          },
+          {
+            h: "Publishing your app",
+            p: [
+              "Anyone can register as a developer and publish. Create an account, complete your studio profile, then submit a listing with your app details, icon and download link.",
+              "Releases are versioned, so you can ship updates and keep a visible changelog for your users."
+            ]
+          },
+          {
+            h: "Contact us",
+            p: [
+              "For support, listing questions, takedown requests or press enquiries, email appstore@openflip.in and we will get back to you.",
+              "For privacy or data requests specifically, see our Privacy Policy \u2014 it explains what we store and how to have it removed."
+            ]
+          }
+        ])
+      })
+    );
+  }
+);
 app.get(
   "/legal/privacy",
   (c) => c.html(

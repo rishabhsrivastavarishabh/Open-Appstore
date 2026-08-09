@@ -1702,3 +1702,49 @@ html[data-theme='dark'] .ai-reco-rank { background: rgba(124, 58, 237, .22); col
 .ai-cmp-verdict { margin: 1rem 0 0; padding: .75rem .9rem; border-left: 3px solid var(--brand-2); background: var(--surface-2); border-radius: 0 10px 10px 0; font-size: .9rem; line-height: 1.55; }
 /* Every AI surface says so: users should know what generated the text. */
 .ai-disclaimer { margin: .7rem 0 0; font-size: .76rem; color: var(--text-3); }
+
+/* ── Auth form controls (signup fields, consent, strength meter) ──────────── */
+/* Checkboxes and radios use flex with align-items:flex-start so a wrapped label
+   keeps its control aligned to the FIRST line of text rather than centring
+   against the whole block. */
+.checkbox,
+.radio { display: flex; align-items: flex-start; gap: .55rem; font-size: .88rem; line-height: 1.5; cursor: pointer; color: var(--text); }
+.checkbox input,
+.radio input { flex: 0 0 auto; width: 1rem; height: 1rem; margin-top: .18rem; accent-color: var(--brand); cursor: pointer; }
+.checkbox a { color: var(--brand); text-decoration: underline; }
+.checkbox a:hover { color: var(--brand-2); }
+
+.auth-fieldset { border: 1px solid var(--border); border-radius: 12px; padding: .7rem .85rem; margin: 0; }
+.auth-fieldset legend { font-size: .82rem; font-weight: 600; padding: 0 .35rem; color: var(--text-2); }
+.radio-row { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+
+.auth-consents { display: flex; flex-direction: column; gap: .6rem; margin: .25rem 0 .2rem; }
+.auth-remember { margin: .1rem 0; }
+
+.field-error { color: #dc2626; font-size: .78rem; }
+html[data-theme='dark'] .field-error { color: #fca5a5; }
+
+/* Strength meter. Width is driven inline by JS (0-100%); only the colour is
+   class-driven, so the bar animates smoothly as the score changes. */
+.pw-meter { display: block; margin-top: .45rem; }
+.pw-meter-track { display: block; height: 5px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+.pw-meter-fill { display: block; height: 100%; width: 0; border-radius: 999px; transition: width 300ms ease, background-color 300ms ease; }
+.pw-meter-fill.is-weak { background: #dc2626; }
+.pw-meter-fill.is-fair { background: #f59e0b; }
+.pw-meter-fill.is-good { background: #3b82f6; }
+.pw-meter-fill.is-strong { background: #059669; }
+.pw-meter-label { display: block; margin-top: .3rem; font-size: .76rem; color: var(--text-2); }
+
+/* ── Cookie consent banner ────────────────────────────────────────────────── */
+/* z-index sits BELOW the AI widget (70) so the banner never covers Sarath's
+   launcher, and the banner is bottom-anchored above the mobile tab bar. */
+.cookie-banner { position: fixed; left: 0; right: 0; bottom: 0; z-index: 65; background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -6px 24px rgba(0, 0, 0, .12); padding: .9rem 1rem; }
+.cookie-inner { max-width: 1100px; margin: 0 auto; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.cookie-text { flex: 1 1 320px; font-size: .86rem; line-height: 1.55; color: var(--text-2); margin: 0; }
+.cookie-text a { color: var(--brand); text-decoration: underline; }
+.cookie-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+@media (max-width: 900px) {
+  .cookie-banner { bottom: calc(var(--tabbar-h, 64px)); }
+  .cookie-actions { width: 100%; }
+  .cookie-actions .btn { flex: 1 1 auto; }
+}

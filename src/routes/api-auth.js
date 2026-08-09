@@ -14,6 +14,7 @@ import {
 // used to degrade to "QR code unavailable offline" whenever that request failed.
 import QRCode from "qrcode";
 import { PROVIDERS, resolveProvider, enabledProviders, safeNext } from "../lib/oauth.js";
+import { consume } from "../lib/ratelimit.js";
 
 const auth = new Hono();
 
@@ -160,7 +161,33 @@ auth.post("/auth/signup", async (c) => {
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
   if (!email || !password) return c.json({ success: false, error: "Email and password are required" }, 400);
+  // Validate BEFORE spending a rate-limit slot, so a typo does not cost an attempt.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+    return c.json({ success: false, error: "Enter a valid email address." }, 400);
   if (password.length < 8) return c.json({ success: false, error: "Password must be at least 8 characters" }, 400);
+
+  const devName = String(body.developer_name || "").trim();
+  if (devName && (devName.length < 3 || devName.length > 100))
+    return c.json({ success: false, error: "Company / developer name must be 3\u2013100 characters." }, 400);
+
+  const devType = body.developer_type === "company" ? "company" : "individual";
+
+  /* Max 3 signup attempts per email per hour. Keyed on the EMAIL rather than the
+     IP: an office or campus behind one NAT address would otherwise share a
+     single budget and lock each other out. The trade-off is that a distributed
+     attacker can rotate emails, which is why this sits in front of Supabase's
+     own protections rather than replacing them. */
+  const rl = consume(`signup:${email}`, "signup");
+  if (!rl.allowed) {
+    return c.json(
+      {
+        success: false,
+        error: `Too many signup attempts for this email. Try again in ${Math.ceil(rl.retryAfter / 60)} minute(s).`
+      },
+      429
+    );
+  }
+
   const { data, error, status } = await sbAuth(c.env, "signup", {
     method: "POST",
     body: {
@@ -168,10 +195,27 @@ auth.post("/auth/signup", async (c) => {
       password,
       data: {
         developer_name: body.developer_name || null,
-        full_name: body.full_name || null
+        full_name: body.full_name || null,
+        phone: body.phone || null,
+        developer_type: devType,
+        // Consent is recorded so we can prove what the user agreed to and when.
+        marketing_opt_in: body.marketing_opt_in === true,
+        accepted_terms_at: body.accepted_terms_at || new Date().toISOString()
       }
     }
   });
+  /* Security logging for signup attempts. Deliberately records the OUTCOME and
+     the edge-provided IP, never the password or any part of it. */
+  console.log(
+    JSON.stringify({
+      evt: "signup_attempt",
+      email,
+      ok: !error,
+      status: status || 200,
+      ip: c.req.header("CF-Connecting-IP") || "unknown",
+      at: new Date().toISOString()
+    })
+  );
   if (error) return c.json({ success: false, error }, status || 400);
   const session = data?.access_token ? data : data?.session || null;
   return c.json({
@@ -426,6 +470,61 @@ auth.post("/auth/2fa/enable", async (c) => {
     enabled: true,
     backup_codes: codes,
     message: "Two-factor authentication is on. Store these backup codes somewhere safe — they are shown once."
+  });
+});
+
+/**
+ * POST /api/auth/2fa/regenerate-codes — mint a fresh set of backup codes.
+ *
+ * Before this existed the only way to get new codes was to disable 2FA and
+ * re-enrol, which left the account unprotected in between and forced the user
+ * to re-scan the QR. This keeps the TOTP secret untouched and only rotates the
+ * codes.
+ *
+ * A current authenticator code is REQUIRED. Regenerating invalidates every
+ * previously issued code, so if a session cookie alone were enough, an attacker
+ * on a stolen session could lock the real owner out of their own recovery
+ * codes. Deliberately not accepting a backup code here either: a leaked code
+ * sheet could otherwise be used to mint a fresh sheet and keep persistence.
+ */
+auth.post("/auth/2fa/regenerate-codes", async (c) => {
+  const { user, error } = await requireUser(c);
+  if (error) return error;
+
+  const body = await c.req.json().catch(() => ({}));
+  const code = String(body.code || "").trim();
+  // Validate before touching the database so a blank field is a cheap 400.
+  if (!code) return c.json({ success: false, error: "Enter the 6-digit code from your authenticator app." }, 400);
+
+  const row = await read2fa(c.env, user.id);
+  if (!row?.enabled || !row.totp_secret)
+    return c.json({ success: false, error: "Turn on two-factor authentication first." }, 400);
+
+  const ok = await totpVerify(row.totp_secret, code);
+  if (!ok)
+    return c.json(
+      { success: false, error: "That code did not match. Check your device clock and try the current code." },
+      401
+    );
+
+  const codes = randomBackupCodes(10);
+  const hashed = [];
+  for (const plain of codes) hashed.push(await sha256Hex(plain));
+  const res = await sbAdminWrite(
+    c.env,
+    "user_2fa",
+    "PATCH",
+    { backup_codes: hashed, updated_at: new Date().toISOString() },
+    `id=eq.${row.id}`
+  );
+  if (res.error) return c.json({ success: false, error: res.error }, res.status || 400);
+
+  await logLogin(c, user.id, true, "2fa backup codes regenerated");
+  return c.json({
+    success: true,
+    enabled: true,
+    backup_codes: codes,
+    message: "New backup codes generated. Your old codes no longer work — store these somewhere safe."
   });
 });
 

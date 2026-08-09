@@ -650,16 +650,90 @@ function initAuthPage(mode) {
     })
   )
 
+  /* ---- password strength meter (signup only) ----
+     Scored on length plus character variety. This is deliberately a HINT, not
+     a gate: the only hard rule is the 8-character minimum that the server also
+     enforces. Blocking "fair" passwords client-side would be security theatre,
+     since the real check has to live server-side anyway. */
+  const pwInput = form.elements.password
+  const pwConfirm = form.elements.password_confirm
+  const meter = $('#pw-meter')
+  const meterFill = $('#pw-meter-fill')
+  const meterLabel = $('#pw-meter-label')
+
+  const scorePassword = (pw) => {
+    if (!pw) return 0
+    let score = 0
+    if (pw.length >= 8) score++
+    if (pw.length >= 12) score++
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++
+    if (/\d/.test(pw)) score++
+    if (/[^A-Za-z0-9]/.test(pw)) score++
+    // Long passphrases are strong even without symbol soup.
+    if (pw.length >= 16) score++
+    return Math.min(4, Math.max(1, score - 1))
+  }
+  const STRENGTH = [
+    { cls: 'is-weak', text: 'Weak — add length or variety' },
+    { cls: 'is-fair', text: 'Fair — a bit longer would help' },
+    { cls: 'is-good', text: 'Good' },
+    { cls: 'is-strong', text: 'Strong' }
+  ]
+
+  if (pwInput && meter) {
+    pwInput.addEventListener('input', () => {
+      const pw = pwInput.value
+      if (!pw) {
+        meter.hidden = true
+        return
+      }
+      meter.hidden = false
+      const s = scorePassword(pw)
+      const info = STRENGTH[s - 1] || STRENGTH[0]
+      if (meterFill) meterFill.className = `pw-meter-fill ${info.cls}`
+      if (meterFill) meterFill.style.width = `${s * 25}%`
+      if (meterLabel) meterLabel.textContent = info.text
+    })
+  }
+
+  /* ---- live confirm-password feedback ---- */
+  const matchError = $('#pw-match-error')
+  const checkMatch = () => {
+    if (!pwInput || !pwConfirm) return true
+    const mismatch = pwConfirm.value.length > 0 && pwConfirm.value !== pwInput.value
+    if (matchError) matchError.hidden = !mismatch
+    pwConfirm.setAttribute('aria-invalid', mismatch ? 'true' : 'false')
+    return !mismatch
+  }
+  pwConfirm?.addEventListener('input', checkMatch)
+  pwInput?.addEventListener('input', () => {
+    if (pwConfirm?.value) checkMatch()
+  })
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault()
     if (alertBox) alertBox.hidden = true
     const fd = new FormData(form)
     const email = String(fd.get('email') || '').trim()
     const password = String(fd.get('password') || '')
+
+    /* Client-side gates for signup. These mirror the server's rules; they exist
+       to give instant feedback, not to be the security boundary. */
+    if (mode === 'signup') {
+      const devName = String(fd.get('developer_name') || '').trim()
+      if (devName.length < 3) return say('Your company / developer name needs at least 3 characters.')
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return say('Enter a valid email address.')
+      if (password.length < 8) return say('Your password needs at least 8 characters.')
+      if (!checkMatch()) return say('Those passwords do not match.')
+      if (!fd.get('agree_terms')) return say('Please accept the Terms of Service to continue.')
+      if (!fd.get('agree_privacy')) return say('Please confirm you have read the Privacy Policy.')
+    }
     const submit = form.querySelector('button[type="submit"]')
     const label = submit.innerHTML
     submit.disabled = true
-    submit.innerHTML = '<span class="spinner spinner-xs"></span> Working…'
+    submit.innerHTML = `<span class="spinner spinner-xs"></span> ${
+      mode === 'signup' ? 'Creating account…' : mode === 'login' ? 'Signing in…' : 'Sending…'
+    }`
 
     const restore = () => {
       submit.disabled = false
@@ -676,7 +750,16 @@ function initAuthPage(mode) {
 
     const path = mode === 'signup' ? '/api/auth/signup' : '/api/auth/login'
     const body = { email, password }
-    if (mode === 'signup') body.developer_name = String(fd.get('developer_name') || '').trim()
+    if (mode === 'signup') {
+      body.developer_name = String(fd.get('developer_name') || '').trim()
+      const phone = String(fd.get('phone') || '').trim()
+      if (phone) body.phone = phone
+      body.developer_type = String(fd.get('developer_type') || 'individual')
+      body.marketing_opt_in = Boolean(fd.get('marketing_opt_in'))
+      // Recording consent is a compliance requirement, not decoration: we store
+      // WHEN the user agreed, alongside which policy version they saw.
+      body.accepted_terms_at = new Date().toISOString()
+    }
 
     const { ok, data } = await api(path, { method: 'POST', body })
     restore()
@@ -1753,7 +1836,7 @@ async function initDevSecurity() {
       const left = info.backup_codes_left ?? 0
       $('#tfa-codes-left').textContent = left
         ? `${left} backup code${left === 1 ? '' : 's'} remaining.`
-        : 'No backup codes left — turn 2FA off and on again to mint a fresh set.'
+        : 'No backup codes left — regenerate a fresh set below.'
     }
   }
 
@@ -1895,6 +1978,37 @@ async function initDevSecurity() {
   $('#tfa-codes-done')?.addEventListener('click', () => {
     if (paneCodes) paneCodes.hidden = true
     lastCodes = []
+  })
+
+  /* ---- regenerate backup codes ----
+     Rotates the code sheet without disabling 2FA. The server requires a live
+     authenticator code, so a stolen session cannot silently replace the codes.
+     On success we reuse showBackupCodes(), which is the same one-time reveal
+     used at enrolment — the plaintext codes only ever exist in this response. */
+  const regenForm = $('#tfa-regen-form')
+  const regenAlert = $('#tfa-regen-alert')
+  regenForm?.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    if (regenAlert) regenAlert.hidden = true
+    const input = $('#tfa-regen-code')
+    const code = (input?.value || '').trim()
+    if (!/^\d{6}$/.test(code)) return alertIn(regenAlert, 'Enter the current 6-digit code from your authenticator app.')
+
+    const btn = regenForm.querySelector('button[type="submit"]')
+    const label = btn.innerHTML
+    btn.disabled = true
+    btn.innerHTML = '<span class="spinner spinner-xs"></span> Regenerating…'
+    const { ok, data } = await api('/api/auth/2fa/regenerate-codes', { method: 'POST', auth: true, body: { code } })
+    btn.disabled = false
+    btn.innerHTML = label
+
+    if (!ok || !data?.success) return alertIn(regenAlert, data?.error || 'Could not regenerate your backup codes.')
+    if (input) input.value = ''
+    showBackupCodes(data.backup_codes || [])
+    toast(data.message || 'New backup codes generated.', 'success', 'Backup codes')
+    await refresh()
+    await loadActivity()
+    document.getElementById('tfa-codes')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   })
 
   /* ---- disable ---- */

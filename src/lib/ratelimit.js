@@ -20,7 +20,11 @@ export const TIERS = {
   verified: 5000,
   // AI calls cost real money per request, so they get their own much tighter
   // tier rather than sharing the data-API budget.
-  ai: 20
+  ai: 20,
+  // Account creation, keyed per email address. Caps credential-stuffing and
+  // signup spam without stopping a genuine user who mistypes their password
+  // a couple of times.
+  signup: 3
 };
 
 /**

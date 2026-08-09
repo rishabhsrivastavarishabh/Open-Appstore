@@ -252,6 +252,7 @@ ${o.body}
       </div>
       <div>
         <h4>Legal</h4>
+        <a href="/about">About</a>
         <a href="/legal/privacy">Privacy</a>
         <a href="/legal/terms">Terms</a>
         <a href="/legal/guidelines">Guidelines</a>
@@ -286,6 +287,24 @@ ${o.body}
     ).join("")
   )}
 </nav>
+
+<!-- Cookie consent. Ships HIDDEN and is revealed by JS only when no choice has
+     been stored yet, so returning visitors never see it again and it cannot
+     flash on screen before the check runs. Rendered server-side (rather than
+     injected) so it needs no layout shift when shown. -->
+<div id="cookie-banner" class="cookie-banner" role="region" aria-label="Cookie notice" hidden>
+  <div class="cookie-inner">
+    <p class="cookie-text">
+      We use only the cookies needed to keep you signed in and to remember your theme.
+      We do not run advertising or third-party tracking cookies.
+      Read our <a href="/legal/privacy">Privacy Policy</a>.
+    </p>
+    <div class="cookie-actions">
+      <button class="btn btn-primary btn-sm" id="cookie-accept" type="button">Accept</button>
+      <button class="btn btn-outline btn-sm" id="cookie-reject" type="button">Reject non-essential</button>
+    </div>
+  </div>
+</div>
 
 <!-- Sarath, the floating AI assistant. Rendered on every page from the layout so it is
      reachable from anywhere, per spec. The panel ships collapsed and inert:
