@@ -39,6 +39,8 @@ single lightweight edge application. Every page is real HTML on first paint — 
   automatic canonical URLs, Open Graph + Twitter cards, path-derived `noindex`, and JSON-LD
   (`WebSite`/`SearchAction`, `SoftwareApplication`, `ItemList`, `BreadcrumbList`) — see §8
 - Web manifest with `related_applications` pointing at `com.app.store`
+- **`/about`** — company, how the store works, and contact (appstore@openflip.in)
+- **Cookie consent banner** on every page (choice stored in `localStorage`, not a cookie)
 - **AI features on the storefront**: **Sarath**, the store's AI app guide — a floating widget on
   every page, natural-language app search on `/apps`, AI app comparison on every listing, and
   personalised picks on the home page
@@ -48,7 +50,7 @@ single lightweight edge application. Every page is real HTML on first paint — 
 - `/developer/apps` — edit listings, publish releases (semver validated, duplicate version → 409)
 - `/developer/submit` — new listing (gated until the developer profile exists)
 - `/developer/profile` — studio profile with live preview
-- `/developer/security` — **two-factor authentication**, backup codes, devices, sign-in history
+- `/developer/security` — **two-factor authentication**, backup codes (**regenerate without disabling 2FA**), devices, sign-in history
 - `/developer/api-keys` — **create / list / revoke `dev_…` API keys** (secret shown once)
 - `/developer/docs` — the full REST API reference, including the v1 Developer API
 
@@ -118,7 +120,7 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 ### Auth
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/api/auth/signup` | `{ email, password, developer_name? }` |
+| POST | `/api/auth/signup` | `{ email, password, developer_name?, phone?, developer_type?, marketing_opt_in?, accepted_terms_at? }` — validates first, then **max 3 attempts per email per hour** |
 | POST | `/api/auth/login` | → `{ session }`, or `{ requires_2fa: true, challenge }` |
 | GET | `/api/auth/google` | `?next=` → 302 to Google via Supabase |
 | POST | `/api/auth/oauth/exchange` | `{ code }` → `{ session }` (PKCE) |
@@ -133,9 +135,20 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 | GET | `/api/auth/2fa` 🔒 | `{ enabled, pending, backup_codes_left }` |
 | POST | `/api/auth/2fa/setup` 🔒 | → `{ secret, otpauth_uri }` (not enforced yet) |
 | POST | `/api/auth/2fa/enable` 🔒 | `{ code }` → `{ backup_codes }` (shown once) |
+| POST | `/api/auth/2fa/regenerate-codes` 🔒 | `{ code }` — **TOTP only** → 10 fresh `{ backup_codes }`; old sheet is revoked |
 | POST | `/api/auth/2fa/disable` 🔒 | `{ code }` — TOTP or backup code |
 | POST | `/api/auth/2fa/verify` | `{ challenge, code }` → `{ session }` |
 | GET | `/api/auth/sessions` 🔒 | devices + last 15 sign-in attempts |
+
+**Why regeneration only accepts a TOTP code.** Regenerating invalidates every
+previously issued backup code. If a session cookie alone were enough, an attacker
+on a stolen session could replace the owner's recovery codes and lock them out;
+if a *backup* code were accepted, a leaked code sheet could be used to mint a
+fresh sheet and keep persistence indefinitely. Requiring a live authenticator
+code means the person must still hold the enrolled device. The TOTP secret is
+left untouched, so the authenticator app keeps working and there is no window
+where the account sits unprotected — which is what the previous
+"disable 2FA, then re-enable" workaround forced.
 
 ### Developer 🔒
 `GET/POST /api/developer/apps`, `PATCH/DELETE /api/developer/apps/:id`,
@@ -421,11 +434,26 @@ Cloudflare Worker, so DNS for the subdomain has to point at Cloudflare Pages.
 - The redesign prompts (home-page gradient restyle, app-details restyle, `/app/{slug}` URL
   restructure, email-OTP signup flow) are **not** built. Note the OTP flow conflicts with the
   earlier deliberate removal of email-OTP login, so it needs a decision before implementation.
-- Auth UI polish from the last spec (full-name field, password-strength meter, confirm-password,
-  separate Terms + Privacy checkboxes, "remember me", show/hide toggles) is **not** built.
-- Route aliases `/auth/signin` and `/auth/forgot-password` do not exist — the live paths are
-  `/auth/login` and `/auth/reset`. `/auth/verify-otp` and `/auth/reset-password` also 404, pending
-  the OTP decision above.
+- **Email OTP cannot be built on this stack today.** There is no mail provider wired into the
+  project (no Resend / SendGrid / SMTP credential), and Supabase's built-in OTP endpoint is
+  disabled on this project — `POST /auth/v1/otp` returns
+  `422 {"error_code":"otp_disabled"}`. Any "send a 6-digit code" flow therefore has no delivery
+  channel. Adding one requires a mail provider + verified sending domain.
+
+### Developer auth URLs
+
+There is **one** account system, not a separate developer credential store: "developer" is a role
+an account gains once it has a studio profile. Two parallel logins would mean two password resets
+and two 2FA enrolments for the same person. These paths therefore all serve the same pages:
+
+| Canonical | Aliases |
+| --- | --- |
+| `/auth/login` | `/auth/signin`, `/developer/signin`, `/developer/login` |
+| `/auth/signup` | `/auth/register`, `/developer/register`, `/developer/signup` |
+| `/auth/reset` | `/auth/forgot-password`, `/developer/forgot-password` |
+
+All are `noindex` (via `NOINDEX_PREFIXES`), so the duplicate URLs cannot create a
+duplicate-content problem in Search Console.
 
 - User-facing library page for `user_installed_apps` (data is seeded, UI pending)
 - In-app notifications UI (`notifications` table unused)

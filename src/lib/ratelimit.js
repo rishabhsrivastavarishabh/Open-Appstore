@@ -89,6 +89,23 @@ export function consume(id, tier = "free") {
 }
 
 /**
+ * Give one unit back to `id`'s hourly bucket.
+ *
+ * Needed when an upstream service rejects a request for its OWN reasons (e.g.
+ * Supabase's 55-second signup throttle). Without a refund, a user who trips the
+ * upstream limit would also silently burn their hourly budget here and be locked
+ * out for an hour after a single successful action -- two independent limiters
+ * compounding into a much harsher effective limit than either one documents.
+ *
+ * Only refunds a live bucket; if the window already rolled over there is
+ * nothing to give back.
+ */
+export function refund(id) {
+  const b = buckets.get(id);
+  if (b && Date.now() < b.reset && b.count > 0) b.count -= 1;
+}
+
+/**
  * Consume one unit against the short per-minute burst window for `id`.
  *
  * Kept separate from `consume()` so the hourly budget is NOT spent when a burst

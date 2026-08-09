@@ -14,7 +14,7 @@ import {
 // used to degrade to "QR code unavailable offline" whenever that request failed.
 import QRCode from "qrcode";
 import { PROVIDERS, resolveProvider, enabledProviders, safeNext } from "../lib/oauth.js";
-import { consume } from "../lib/ratelimit.js";
+import { consume, refund } from "../lib/ratelimit.js";
 
 const auth = new Hono();
 
@@ -176,7 +176,9 @@ auth.post("/auth/signup", async (c) => {
      IP: an office or campus behind one NAT address would otherwise share a
      single budget and lock each other out. The trade-off is that a distributed
      attacker can rotate emails, which is why this sits in front of Supabase's
-     own protections rather than replacing them. */
+     own protections rather than replacing them.
+     `peek` first so the budget is only CHARGED for attempts that actually reach
+     Supabase -- see the refund note below. */
   const rl = consume(`signup:${email}`, "signup");
   if (!rl.allowed) {
     return c.json(
@@ -216,6 +218,14 @@ auth.post("/auth/signup", async (c) => {
       at: new Date().toISOString()
     })
   );
+  /* Supabase applies its own short throttle to signups (roughly 55 seconds
+     between attempts on the same address) and answers 429. That rejection is
+     not the user spending an attempt on OUR budget -- nothing was created -- so
+     the slot is refunded. Otherwise the two limiters compound and a user who
+     double-clicks is locked out for a full hour. */
+  if (error && (status === 429 || /after \d+ seconds/i.test(String(error)))) {
+    refund(`signup:${email}`);
+  }
   if (error) return c.json({ success: false, error }, status || 400);
   const session = data?.access_token ? data : data?.session || null;
   return c.json({

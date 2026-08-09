@@ -2627,6 +2627,59 @@ async function initAiCompare() {
   })
 }
 
+/* ------------------------------ cookie consent ------------------------------ */
+/* The banner is only shown when no choice has been recorded. The choice lives in
+   localStorage rather than a cookie, because storing a cookie in order to ask
+   about cookies is exactly the thing users object to.
+
+   This site sets no advertising or analytics cookies, so "Reject" has nothing to
+   switch off today — it is recorded honestly rather than being a no-op button
+   that pretends to do something. If tracking is ever added, it must check
+   cookieConsentAllows() before loading. */
+const COOKIE_KEY = 'oas.cookie-consent'
+
+function cookieConsentAllows() {
+  try {
+    return localStorage.getItem(COOKIE_KEY) === 'accepted'
+  } catch {
+    return false
+  }
+}
+
+function initCookieConsent() {
+  const banner = document.getElementById('cookie-banner')
+  if (!banner) return
+
+  let stored = null
+  try {
+    stored = localStorage.getItem(COOKIE_KEY)
+  } catch {
+    // Private mode with storage blocked: showing a banner we cannot remember
+    // dismissing would nag on every page load, so stay silent.
+    return
+  }
+  if (stored) return
+
+  banner.hidden = false
+
+  const decide = (value) => {
+    try {
+      localStorage.setItem(COOKIE_KEY, value)
+    } catch {
+      /* nothing we can do; just close it for this page */
+    }
+    banner.hidden = true
+    toast(
+      value === 'accepted' ? 'Preferences saved.' : 'Non-essential cookies rejected.',
+      'success',
+      'Cookies'
+    )
+  }
+
+  document.getElementById('cookie-accept')?.addEventListener('click', () => decide('accepted'))
+  document.getElementById('cookie-reject')?.addEventListener('click', () => decide('rejected'))
+}
+
 /* ------------------------------ bootstrap ------------------------------ */
 function boot() {
   initTheme()
@@ -2637,6 +2690,7 @@ function boot() {
   initAccount()
   // Site-wide: the assistant must be reachable from any page.
   initAiWidget()
+  initCookieConsent()
 
   switch (BOOT.page) {
     case 'browse':
