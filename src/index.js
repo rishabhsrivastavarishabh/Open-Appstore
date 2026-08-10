@@ -399,7 +399,7 @@ app.get("/app/:slug", async (c) => {
       message: `We couldn't find an app at "${slug}". It may have been unpublished, renamed, or the link is wrong.`
     });
   const app_ = toAppView(row);
-  const [devRes, moreRes, similarRes, reviewsRes, versionsRes] = await Promise.all([
+  const [devRes, moreRes, similarRes, reviewsRes, versionsRes, allRatingsRes] = await Promise.all([
     app_.developer_id ? sbSelect(
       c.env,
       "developers",
@@ -424,8 +424,22 @@ app.get("/app/:slug", async (c) => {
       c.env,
       "app_versions",
       `select=id,version_number,release_notes,download_url,file_size,release_date,created_at&app_id=eq.${app_.id}&order=release_date.desc.nullslast&limit=20`
-    )
+    ),
+    // Every rating, not just the 20 reviews we render. PostgREST refuses
+    // aggregate functions on this project (PGRST123), so we pull the single
+    // `rating` column — a few bytes per row — and tally it here. Capped so a
+    // runaway-popular app can never blow the response up.
+    sbSelect(c.env, "app_reviews", `select=rating&app_id=eq.${app_.id}&limit=5000`)
   ]);
+  const ratingCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const r of allRatingsRes.data || []) {
+    const n = Math.round(Number(r.rating) || 0);
+    if (n >= 1 && n <= 5) ratingCounts[n] += 1;
+  }
+  // A listing changes rarely but is hit often. 60s at the edge with a 5-minute
+  // stale window keeps repeat views near-instant while a publish still lands
+  // quickly. Deliberately NOT longer: developers expect their edit to show up.
+  c.header("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
   return c.html(
     layout({
       title: app_.name,
@@ -456,7 +470,8 @@ app.get("/app/:slug", async (c) => {
         more: (moreRes.data || []).map(toAppView),
         similar: (similarRes.data || []).map(toAppView),
         reviews: reviewsRes.data || [],
-        versions: versionsRes.data || []
+        versions: versionsRes.data || [],
+        ratingCounts
       }),
       bootstrap: { page: "app", appId: app_.id, slug: app_.slug }
     })

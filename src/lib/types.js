@@ -37,7 +37,7 @@ const CATEGORY_META = {
 const APP_SELECT = "id,app_id,app_name,app_slug,description,icon_url,screenshots,category,current_version,latest_version,latest_version_code,min_version,is_free,price,download_url,google_drive_link,website,website_link,privacy_policy_link,change_log,auto_update,update_available,email,rating,total_downloads,total_reviews,status,developer_id,store_id,created_at,updated_at";
 const APP_SELECT_WITH_DEV = `${APP_SELECT},developers(developer_name,company_name,avatar_url,verified)`;
 const APP_SELECT_PLAIN = APP_SELECT;
-const DEV_SELECT = "id,user_id,developer_name,company_name,description,website,email,avatar_url,verified,verified_at,created_at,updated_at";
+const DEV_SELECT = "id,user_id,developer_name,company_name,description,website,email,avatar_url,verified,verified_badge,verified_at,apps_count,total_downloads,created_at,updated_at";
 const REVIEW_SELECT = "id,app_id,user_id,rating,title,review_text,screenshots,helpful_count,created_at,updated_at";
 const ORDER = {
   popular: "total_downloads.desc.nullslast",

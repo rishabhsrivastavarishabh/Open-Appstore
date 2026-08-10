@@ -273,6 +273,17 @@ function sizeLabel(v) {
 function appDetailPage(d) {
   const { app, developer, more, similar, reviews } = d;
   const versions = d.versions || [];
+  // The rating breakdown must reflect EVERY rating, not just the page of
+  // reviews we render. ratingCounts is a slim id-free query over the whole
+  // table; if it is missing we degrade to counting the loaded reviews rather
+  // than showing a bar chart that silently contradicts the headline average.
+  const rc = d.ratingCounts || null;
+  const ratingTotal = rc ? [1, 2, 3, 4, 5].reduce((n, k) => n + (rc[k] || 0), 0) : reviews.length;
+  const countFor = (n) => (rc ? rc[n] || 0 : reviews.filter((r) => Number(r.rating) === n).length);
+  const reviewTotal = app.total_ratings || ratingTotal || reviews.length || 0;
+  // "App size" is a property of a build, not of the listing, so it comes from
+  // the newest version row that actually recorded one.
+  const sizeText = sizeLabel((versions.find((v) => v.file_size) || {}).file_size) || "\u2014";
   const driveUrl = app.drive_url && app.drive_url !== app.download_url ? app.drive_url : null;
   const siteUrl = app.website_link || app.website || null;
   // Deep link into the companion Android client (application id com.app.store).
@@ -316,24 +327,36 @@ function appDetailPage(d) {
           </button>
           <a class="btn btn-outline-light btn-lg" href="${esc(appLink)}" data-open-in-app="${esc(app.slug)}"><i class="fa-brands fa-android"></i> Open in app</a>
           ${siteUrl ? `<a class="btn btn-outline-light btn-lg" href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-globe"></i> Website</a>` : ""}
-          <button class="btn btn-ghost-light btn-lg js-share" data-title="${esc(app.name)}"><i class="fa-solid fa-share-nodes"></i> Share</button>
+          <button class="btn btn-ghost-light btn-lg js-share" data-title="${esc(app.name)}" data-slug="${esc(app.slug)}" data-url="${esc(webUrl)}"><i class="fa-solid fa-share-nodes"></i> Share</button>
         </div>
       </div>
     </div>
     <div class="app-hero-stats">
       <div><strong>${app.rating > 0 ? app.rating.toFixed(1) : "\u2014"}</strong><small>${app.rating > 0 ? stars(app.rating, "stars-sm") : "No ratings"}</small></div>
       <div><strong>${formatCount(app.downloads)}</strong><small>Downloads</small></div>
-      <div><strong>${app.total_ratings || reviews.length || 0}</strong><small>Reviews</small></div>
+      <div><a class="hero-stat-link" href="#ratings"><strong>${formatCount(reviewTotal)}</strong><small>Reviews</small></a></div>
       <div><strong>${esc(app.version)}</strong><small>Version</small></div>
     </div>
   </div>
+</section>
+
+<section class="quick-stats" aria-label="App at a glance">
+  <div class="quick-stat"><span class="qs-icon" style="--m:#3b82f6"><i class="fa-solid fa-download"></i></span><div><strong>${formatCount(app.downloads)}</strong><small>Downloads</small></div></div>
+  <div class="quick-stat"><span class="qs-icon" style="--m:#f59e0b"><i class="fa-solid fa-star"></i></span><div><strong>${app.rating > 0 ? `${app.rating.toFixed(1)}\u2605` : "\u2014"}</strong><small>Average rating</small></div></div>
+  <div class="quick-stat"><span class="qs-icon" style="--m:#8b5cf6"><i class="fa-solid fa-database"></i></span><div><strong>${esc(sizeText)}</strong><small>App size</small></div></div>
+  <div class="quick-stat"><span class="qs-icon" style="--m:#22c55e"><i class="fa-solid fa-calendar-day"></i></span><div><strong>${esc(updated)}</strong><small>Last updated</small></div></div>
 </section>
 
 <section class="app-detail-layout">
   <div class="app-detail-main">
     ${app.screenshots.length ? `<div class="card">
       <h2 class="card-title"><i class="fa-solid fa-images"></i> Screenshots</h2>
-      <div class="screenshot-rail">${app.screenshots.map((s, i) => `<img src="${esc(s)}" alt="${esc(app.name)} screenshot ${i + 1}" loading="lazy" />`).join("")}</div>
+      <div class="shot-wrap">
+        <button type="button" class="shot-nav shot-prev" aria-label="Previous screenshot"><i class="fa-solid fa-chevron-left"></i></button>
+        <div class="screenshot-rail" id="shot-rail">${app.screenshots.map((s, i) => `<img class="js-shot" src="${esc(s)}" alt="${esc(app.name)} screenshot ${i + 1}" data-index="${i}" loading="lazy" decoding="async" />`).join("")}</div>
+        <button type="button" class="shot-nav shot-next" aria-label="Next screenshot"><i class="fa-solid fa-chevron-right"></i></button>
+      </div>
+      ${app.screenshots.length > 1 ? `<div class="shot-dots" id="shot-dots" role="tablist" aria-label="Screenshot navigation">${app.screenshots.map((_, i) => `<button type="button" class="shot-dot${i === 0 ? " is-active" : ""}" data-index="${i}" role="tab" aria-label="Screenshot ${i + 1}"></button>`).join("")}</div>` : ""}
     </div>` : ""}
 
     ${app.update_available ? `<div class="card update-card">
@@ -351,7 +374,11 @@ function appDetailPage(d) {
 
     <div class="card">
       <h2 class="card-title"><i class="fa-solid fa-circle-info"></i> About this app</h2>
-      <div class="prose">${descHtml}</div>
+      <!-- Clamped with CSS rather than by cutting the string: the description is
+           rendered markdown, and slicing HTML at 300 chars can land inside a tag
+           and break the whole page. The toggle only renders for long text. -->
+      <div class="prose${(app.description || "").length > 400 ? " is-clamped" : ""}" id="about-body">${descHtml}</div>
+      ${(app.description || "").length > 400 ? '<button type="button" class="btn btn-ghost btn-sm read-more" id="about-toggle" aria-expanded="false" aria-controls="about-body">Read more <i class="fa-solid fa-chevron-down"></i></button>' : ""}
       ${!app.update_available && app.change_log ? `<details class="changelog"><summary><i class="fa-solid fa-list-check"></i> What's new in v${esc(app.version)}</summary><div class="prose">${renderDescription(app.change_log)}</div></details>` : ""}
     </div>
 
@@ -375,28 +402,38 @@ function appDetailPage(d) {
       </ol>
     </div>` : ""}
 
-    <div class="card">
+    <div class="card" id="ratings">
       <h2 class="card-title"><i class="fa-solid fa-star"></i> Ratings &amp; reviews</h2>
       <div class="rating-summary">
         <div class="rating-big">
           <strong>${app.rating > 0 ? app.rating.toFixed(1) : "\u2014"}</strong>
           ${stars(app.rating)}
-          <small>${app.total_ratings || reviews.length || 0} ratings</small>
+          <small>${formatCount(reviewTotal)} rating${reviewTotal === 1 ? "" : "s"}</small>
         </div>
         <div class="rating-bars">
           ${[5, 4, 3, 2, 1].map((n) => {
-    const count = reviews.filter((r) => Number(r.rating) === n).length;
-    const pct = reviews.length ? Math.round(count / reviews.length * 100) : 0;
-    return `<div class="rating-bar"><span>${n}<i class="fa-solid fa-star"></i></span><div class="bar"><i style="width:${pct}%"></i></div><small>${count}</small></div>`;
+    const count = countFor(n);
+    const pct = ratingTotal ? Math.round(count / ratingTotal * 100) : 0;
+    return `<div class="rating-bar"><span>${n}<i class="fa-solid fa-star"></i></span><div class="bar"><i style="width:${pct}%"></i></div><small>${pct}%</small></div>`;
   }).join("")}
         </div>
       </div>
+      ${reviews.length > 1 ? `<div class="reviews-toolbar">
+        <label class="sr-only" for="review-sort">Sort reviews</label>
+        <select id="review-sort" class="ai-cmp-select">
+          <option value="newest">Newest first</option>
+          <option value="highest">Highest rated</option>
+          <option value="lowest">Lowest rated</option>
+          <option value="helpful">Most helpful</option>
+        </select>
+      </div>` : ""}
       <div id="reviews-list" class="reviews-list">
         ${reviews.length ? reviews.map(
-    (r) => `<article class="review">
+    (r) => `<article class="review" data-rating="${Number(r.rating) || 0}" data-date="${esc(r.created_at || "")}" data-helpful="${Number(r.helpful_count || 0)}">
           <header>${stars(Number(r.rating) || 0, "stars-sm")} <strong>${esc(r.title || "Review")}</strong>
-          <time>${r.created_at ? new Date(r.created_at).toLocaleDateString() : ""}</time></header>
+          <time datetime="${esc(r.created_at || "")}">${r.created_at ? new Date(r.created_at).toLocaleDateString() : ""}</time></header>
           <p>${esc(r.review_text || "")}</p>
+          ${Number(r.helpful_count || 0) > 0 ? `<footer class="review-foot"><i class="fa-regular fa-thumbs-up"></i> ${formatCount(Number(r.helpful_count))} found this helpful</footer>` : ""}
         </article>`
   ).join("") : `<p class="muted">No reviews yet \u2014 be the first to share your experience.</p>`}
       </div>
@@ -495,16 +532,23 @@ function appDetailPage(d) {
     </div>
 
     ${developer ? `<div class="card dev-card">
-      <h2 class="card-title"><i class="fa-solid fa-user-tie"></i> Developer</h2>
+      <h2 class="card-title"><i class="fa-solid fa-user-tie"></i> Meet the developer</h2>
       <div class="dev-card-head">
-        ${developer.logo_url || developer.avatar_url ? `<img class="dev-logo" src="${esc(developer.logo_url || developer.avatar_url)}" alt="${esc(developer.developer_name)}" loading="lazy" />` : `<span class="dev-logo dev-logo-fallback">${esc((developer.developer_name || "?")[0])}</span>`}
+        ${developer.avatar_url ? `<img class="dev-logo" src="${esc(developer.avatar_url)}" alt="${esc(developer.developer_name)}" loading="lazy" />` : `<span class="dev-logo dev-logo-fallback">${esc((developer.developer_name || "?")[0])}</span>`}
         <div>
-          <strong>${esc(developer.developer_name)}${developer.verified ? ' <i class="fa-solid fa-circle-check verified"></i>' : ""}</strong>
+          <strong>${esc(developer.developer_name)}${developer.verified || developer.verified_badge ? ' <i class="fa-solid fa-circle-check verified" title="Verified developer"></i>' : ""}</strong>
           ${developer.company_name ? `<small>${esc(developer.company_name)}</small>` : ""}
         </div>
       </div>
-      ${developer.description ? `<p class="muted">${esc(developer.description)}</p>` : ""}
-      <a class="btn btn-outline btn-block btn-sm" href="/developer-profile/${esc(developer.id)}">View all apps</a>
+      ${developer.description ? `<p class="muted">${esc(developer.description.length > 250 ? `${developer.description.slice(0, 247)}\u2026` : developer.description)}</p>` : ""}
+      <div class="dev-stats">
+        <div><strong>${formatCount(Number(developer.apps_count || more.length + 1))}</strong><small>Apps</small></div>
+        <div><strong>${formatCount(Number(developer.total_downloads || 0))}</strong><small>Downloads</small></div>
+        <div><strong>${developer.verified || developer.verified_badge ? "Yes" : "No"}</strong><small>Verified</small></div>
+      </div>
+      <a class="btn btn-outline btn-block btn-sm" href="/developer-profile/${esc(developer.id)}"><i class="fa-solid fa-boxes-stacked"></i> View more apps</a>
+      ${developer.email ? `<a class="btn btn-ghost btn-block btn-sm" href="mailto:${esc(developer.email)}"><i class="fa-solid fa-envelope"></i> Contact developer</a>` : ""}
+      ${developer.website ? `<a class="btn btn-ghost btn-block btn-sm" href="${esc(developer.website)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-globe"></i> Website</a>` : ""}
     </div>` : ""}
 
     ${more.length ? `<div class="card">
@@ -520,6 +564,48 @@ function appDetailPage(d) {
     </div>
   </aside>
 </section>
+
+<dialog id="share-dialog" class="dialog share-dialog" data-url="${esc(webUrl)}" data-slug="${esc(app.slug)}" data-name="${esc(app.name)}">
+  <div class="dialog-form">
+    <header class="dialog-head">
+      <h2><i class="fa-solid fa-share-nodes"></i> Share ${esc(app.name)}</h2>
+      <button type="button" class="icon-btn" data-close-dialog aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+    </header>
+    <div class="dialog-body">
+      <label class="field"><span>App link</span>
+        <div class="copy-row">
+          <input type="text" id="share-url" readonly value="${esc(webUrl)}" aria-label="App link" />
+          <button type="button" class="btn btn-outline btn-sm js-copy" data-copy-target="share-url"><i class="fa-solid fa-copy"></i> Copy</button>
+        </div>
+      </label>
+      <label class="field"><span>App slug</span>
+        <div class="copy-row">
+          <input type="text" id="share-slug" readonly value="${esc(app.slug)}" aria-label="App slug" />
+          <button type="button" class="btn btn-outline btn-sm js-copy" data-copy-target="share-slug"><i class="fa-solid fa-copy"></i> Copy</button>
+        </div>
+      </label>
+      <div class="share-grid">
+        <a class="share-tile" style="--m:#25d366" href="https://wa.me/?text=${encodeURIComponent(`Check out ${app.name} on Open Appstore: ${webUrl}`)}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-whatsapp"></i><span>WhatsApp</span></a>
+        <a class="share-tile" style="--m:#229ed9" href="https://t.me/share/url?url=${encodeURIComponent(webUrl)}&amp;text=${encodeURIComponent(`Check out ${app.name} on Open Appstore`)}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-telegram"></i><span>Telegram</span></a>
+        <a class="share-tile" style="--m:#1da1f2" href="https://twitter.com/intent/tweet?url=${encodeURIComponent(webUrl)}&amp;text=${encodeURIComponent(`Check out ${app.name} on Open Appstore`)}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-x-twitter"></i><span>X</span></a>
+        <a class="share-tile" style="--m:#8b5cf6" href="mailto:?subject=${encodeURIComponent(`${app.name} on Open Appstore`)}&amp;body=${encodeURIComponent(`I thought you'd like ${app.name}:\n\n${webUrl}`)}"><i class="fa-solid fa-envelope"></i><span>Email</span></a>
+        <button type="button" class="share-tile" style="--m:#0f172a" id="share-native"><i class="fa-solid fa-mobile-screen"></i><span>More…</span></button>
+        <button type="button" class="share-tile" style="--m:#22c55e" id="share-qr-btn"><i class="fa-solid fa-qrcode"></i><span>QR code</span></button>
+      </div>
+      <!-- The QR is drawn locally in a canvas rather than fetched from a QR
+           web service: sending every shared app URL to a third party would leak
+           browsing behaviour, and the image would break if that host went down. -->
+      <div id="share-qr" class="share-qr" hidden><canvas id="share-qr-canvas" width="200" height="200" aria-label="QR code for this app link"></canvas><small>Scan to open ${esc(app.name)}</small></div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="shot-lightbox" class="lightbox">
+  <button type="button" class="icon-btn lightbox-close" data-close-dialog aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+  <button type="button" class="lightbox-nav lightbox-prev" aria-label="Previous"><i class="fa-solid fa-chevron-left"></i></button>
+  <img id="lightbox-img" alt="" />
+  <button type="button" class="lightbox-nav lightbox-next" aria-label="Next"><i class="fa-solid fa-chevron-right"></i></button>
+</dialog>
 `);
 }
 function renderDescription(md) {
