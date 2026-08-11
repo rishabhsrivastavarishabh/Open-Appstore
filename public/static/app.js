@@ -457,21 +457,190 @@ function initGetButtons() {
     if (share) {
       e.preventDefault()
       const title = share.dataset.title || document.title
-      const url = location.href
+      // The canonical /app/{slug} URL is rendered into data-url server-side.
+      // location.href is only a fallback: it carries whatever query string or
+      // #fragment the visitor arrived with, so sharing it spreads tracking
+      // params and anchors that were never meant to be part of the link.
+      const url = share.dataset.url || location.href
+      const dialog = $('#share-dialog')
+      // The modal beats the native sheet here because it also exposes the slug
+      // and a QR code, which navigator.share cannot express.
+      if (dialog && typeof dialog.showModal === 'function') {
+        dialog.showModal()
+        return
+      }
       if (navigator.share) {
         try {
           await navigator.share({ title, url })
         } catch {}
-      } else if (navigator.clipboard) {
-        try {
-          await navigator.clipboard.writeText(url)
-          toast('Link copied to clipboard.', 'success')
-        } catch {
-          toast('Could not copy the link.', 'error')
-        }
+      } else {
+        await copyText(url, 'Link copied to clipboard.')
       }
     }
   })
+}
+
+/** Copy helper that degrades to a hidden textarea where the async clipboard
+ *  API is unavailable (older Safari, and any non-secure context). */
+async function copyText(text, okMsg) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      ta.remove()
+    }
+    toast(okMsg || 'Copied.', 'success')
+    return true
+  } catch {
+    toast('Could not copy — select the text and copy manually.', 'error')
+    return false
+  }
+}
+
+/* ---------------------------- share dialog ------------------------------ */
+function initShareDialog() {
+  const dialog = $('#share-dialog')
+  if (!dialog) return
+
+  dialog.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-close-dialog]')) { dialog.close(); return }
+    // Clicking the backdrop (the dialog element itself) dismisses.
+    if (e.target === dialog) { dialog.close(); return }
+
+    const copyBtn = e.target.closest('.js-copy')
+    if (copyBtn) {
+      const input = document.getElementById(copyBtn.dataset.copyTarget)
+      if (!input) return
+      const ok = await copyText(input.value, `Copied: ${input.value}`)
+      if (ok) {
+        const original = copyBtn.innerHTML
+        copyBtn.innerHTML = '<i class="fa-solid fa-check"></i> Copied'
+        setTimeout(() => { copyBtn.innerHTML = original }, 1800)
+      }
+      return
+    }
+
+    if (e.target.closest('#share-native')) {
+      const url = dialog.dataset.url || location.href
+      const title = dialog.dataset.name || document.title
+      if (navigator.share) {
+        try { await navigator.share({ title, url }) } catch {}
+      } else {
+        await copyText(url, 'Link copied to clipboard.')
+      }
+      return
+    }
+
+    if (e.target.closest('#share-qr-btn')) {
+      const box = $('#share-qr')
+      if (!box) return
+      const showing = box.hidden
+      box.hidden = !showing
+      if (!showing) return
+      // Loaded on demand: the encoder is dead weight for the overwhelming
+      // majority of visits, which never open the QR panel at all.
+      try {
+        const { drawQr } = await import('/static/qr.js')
+        drawQr($('#share-qr-canvas'), dialog.dataset.url || location.href)
+      } catch {
+        box.hidden = true
+        toast('Could not render the QR code — copy the link instead.', 'warn')
+      }
+    }
+  })
+}
+
+/* ------------------- app detail: shots / sort / read more ---------------- */
+function initAppDetail() {
+  // Read more / read less
+  const toggle = $('#about-toggle')
+  const body = $('#about-body')
+  if (toggle && body) {
+    toggle.addEventListener('click', () => {
+      const open = body.classList.toggle('is-clamped') === false
+      toggle.setAttribute('aria-expanded', String(open))
+      toggle.innerHTML = open
+        ? 'Read less <i class="fa-solid fa-chevron-up"></i>'
+        : 'Read more <i class="fa-solid fa-chevron-down"></i>'
+    })
+  }
+
+  // Screenshot rail: dots, arrows, lightbox
+  const rail = $('#shot-rail')
+  if (rail) {
+    const shots = $$('.js-shot', rail)
+    const dots = $$('.shot-dot')
+    const scrollTo = (i) => {
+      const img = shots[i]
+      if (img) rail.scrollTo({ left: img.offsetLeft - rail.offsetLeft, behavior: 'smooth' })
+    }
+    dots.forEach((d) => d.addEventListener('click', () => scrollTo(Number(d.dataset.index))))
+    $('.shot-prev')?.addEventListener('click', () => rail.scrollBy({ left: -rail.clientWidth * 0.8, behavior: 'smooth' }))
+    $('.shot-next')?.addEventListener('click', () => rail.scrollBy({ left: rail.clientWidth * 0.8, behavior: 'smooth' }))
+    // Keep the dots in step with manual/touch scrolling.
+    let raf = 0
+    rail.addEventListener('scroll', () => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        const mid = rail.scrollLeft + rail.clientWidth / 2
+        let best = 0
+        let bestDist = Infinity
+        shots.forEach((img, i) => {
+          const centre = img.offsetLeft - rail.offsetLeft + img.clientWidth / 2
+          const dist = Math.abs(centre - mid)
+          if (dist < bestDist) { bestDist = dist; best = i }
+        })
+        dots.forEach((d, i) => d.classList.toggle('is-active', i === best))
+      })
+    }, { passive: true })
+
+    const box = $('#shot-lightbox')
+    const bigImg = $('#lightbox-img')
+    if (box && bigImg && typeof box.showModal === 'function') {
+      let current = 0
+      const show = (i) => {
+        current = (i + shots.length) % shots.length
+        bigImg.src = shots[current].src
+        bigImg.alt = shots[current].alt || ''
+      }
+      shots.forEach((img, i) => img.addEventListener('click', () => { show(i); box.showModal() }))
+      box.addEventListener('click', (e) => {
+        if (e.target.closest('.lightbox-prev')) { show(current - 1); return }
+        if (e.target.closest('.lightbox-next')) { show(current + 1); return }
+        if (e.target.closest('[data-close-dialog]') || e.target === box) box.close()
+      })
+      box.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft') show(current - 1)
+        if (e.key === 'ArrowRight') show(current + 1)
+      })
+    }
+  }
+
+  // Review sorting — reorders the already-rendered nodes, so it costs no
+  // network round-trip and cannot get out of sync with what is on screen.
+  const sort = $('#review-sort')
+  const list = $('#reviews-list')
+  if (sort && list) {
+    sort.addEventListener('change', () => {
+      const items = $$('.review', list)
+      const by = sort.value
+      items.sort((a, b) => {
+        if (by === 'highest') return Number(b.dataset.rating) - Number(a.dataset.rating)
+        if (by === 'lowest') return Number(a.dataset.rating) - Number(b.dataset.rating)
+        if (by === 'helpful') return Number(b.dataset.helpful) - Number(a.dataset.helpful)
+        return new Date(b.dataset.date || 0) - new Date(a.dataset.date || 0)
+      })
+      items.forEach((el) => list.appendChild(el))
+    })
+  }
 }
 
 /* ------------------------------- browse -------------------------------- */
@@ -2705,6 +2874,8 @@ function boot() {
       // Remember the visit so "Apps You Might Like" has something to work with.
       recentPush(BOOT.slug)
       initAiCompare()
+      initShareDialog()
+      initAppDetail()
       break
     case 'auth-login':
       initAuthPage('login')
