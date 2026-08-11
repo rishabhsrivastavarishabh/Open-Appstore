@@ -548,7 +548,7 @@ function initShareDialog() {
       // Loaded on demand: the encoder is dead weight for the overwhelming
       // majority of visits, which never open the QR panel at all.
       try {
-        const { drawQr } = await import('/static/qr.js')
+        const { drawQr } = await import('/static/qr-render.js')
         drawQr($('#share-qr-canvas'), dialog.dataset.url || location.href)
       } catch {
         box.hidden = true
@@ -558,8 +558,57 @@ function initShareDialog() {
   })
 }
 
+/* ------------------------- device compatibility -------------------------- */
+/** Best-effort platform sniff. Only used to add helpful context — never to
+ *  block a download, since UA strings lie and desktop-mode browsers misreport. */
+function detectPlatform() {
+  const ua = navigator.userAgent || ''
+  // iPadOS 13+ reports itself as a Mac, so touch support disambiguates.
+  const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1
+  if (/Android/i.test(ua)) return 'Android'
+  if (/iPhone|iPad|iPod/i.test(ua) || iPadOS) return 'iOS'
+  if (/Windows NT/i.test(ua)) return 'Windows'
+  if (/Mac OS X/i.test(ua)) return 'macOS'
+  if (/Linux|X11|CrOS/i.test(ua)) return 'Linux'
+  return null
+}
+
+function initDeviceNotice() {
+  const box = $('#device-notice')
+  if (!box) return
+  const target = box.dataset.platform || ''
+  const size = box.dataset.size || ''
+  const kind = box.dataset.kind || 'other'
+  // Nothing useful to say about a generic archive or an unlabelled link.
+  if (!target || kind === 'other') return
+
+  const here = detectPlatform()
+  if (!here) return
+
+  const sizeBit = size && size !== '—' ? ` · ${size} download` : ''
+  if (here === target) {
+    box.className = 'device-notice is-ok'
+    box.innerHTML = `<i class="fa-solid fa-circle-check"></i> <span>Compatible with your ${escapeHtml(here)} device${escapeHtml(sizeBit)}</span>`
+  } else {
+    // Phrased as information, not a refusal: the visitor may well be browsing
+    // on a laptop in order to send the link to their phone.
+    box.className = 'device-notice is-warn'
+    box.innerHTML = `<i class="fa-solid fa-circle-info"></i> <span>This is ${escapeHtml(target === 'iOS' ? 'an' : 'a')} ${escapeHtml(target)} download${escapeHtml(sizeBit)}. You appear to be on ${escapeHtml(here)} — open this page on your ${escapeHtml(target)} device, or use Share to send yourself the link.</span>`
+  }
+  box.hidden = false
+}
+
+/** Minimal escaper for the few strings we inject above. */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[ch])
+}
+
 /* ------------------- app detail: shots / sort / read more ---------------- */
 function initAppDetail() {
+  initDeviceNotice()
+
   // Read more / read less
   const toggle = $('#about-toggle')
   const body = $('#about-body')

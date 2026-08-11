@@ -8,6 +8,7 @@ import apiV1 from "./routes/api-v1.js";
 import apiAi from "./routes/api-ai.js";
 import { sbSelect } from "./lib/supabase.js";
 import { normalizeImageUrl } from "./lib/media.js";
+import { resolveAppSize, classifyDownload } from "./lib/appsize.js";
 import {
   APP_SELECT_WITH_DEV,
   DEV_SELECT,
@@ -440,6 +441,14 @@ app.get("/app/:slug", async (c) => {
   // stale window keeps repeat views near-instant while a publish still lands
   // quickly. Deliberately NOT longer: developers expect their edit to show up.
   c.header("Cache-Control", "public, max-age=0, s-maxage=60, stale-while-revalidate=300");
+  // Size is measured from the actual file rather than trusting the listing —
+  // the recorded values are frequently absent and sometimes plain wrong.
+  const primaryDownload = app_.download_url || app_.drive_url || null;
+  const sizeInfo = await resolveAppSize(c.env, {
+    versions: versionsRes.data || [],
+    downloadUrl: primaryDownload
+  });
+  const downloadKind = classifyDownload(primaryDownload);
   return c.html(
     layout({
       title: app_.name,
@@ -471,7 +480,9 @@ app.get("/app/:slug", async (c) => {
         similar: (similarRes.data || []).map(toAppView),
         reviews: reviewsRes.data || [],
         versions: versionsRes.data || [],
-        ratingCounts
+        ratingCounts,
+        sizeInfo,
+        downloadKind
       }),
       bootstrap: { page: "app", appId: app_.id, slug: app_.slug }
     })

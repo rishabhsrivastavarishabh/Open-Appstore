@@ -281,9 +281,12 @@ function appDetailPage(d) {
   const ratingTotal = rc ? [1, 2, 3, 4, 5].reduce((n, k) => n + (rc[k] || 0), 0) : reviews.length;
   const countFor = (n) => (rc ? rc[n] || 0 : reviews.filter((r) => Number(r.rating) === n).length);
   const reviewTotal = app.total_ratings || ratingTotal || reviews.length || 0;
-  // "App size" is a property of a build, not of the listing, so it comes from
-  // the newest version row that actually recorded one.
-  const sizeText = sizeLabel((versions.find((v) => v.file_size) || {}).file_size) || "\u2014";
+  // Size is resolved server-side: a recorded value if one exists, otherwise a
+  // HEAD probe of the real download. Falls back to the listing value only if
+  // both failed, and to an em-dash rather than inventing a number.
+  const sizeInfo = d.sizeInfo || {};
+  const sizeText = sizeInfo.label || sizeLabel((versions.find((v) => v.file_size) || {}).file_size) || "\u2014";
+  const dl = d.downloadKind || {};
   const driveUrl = app.drive_url && app.drive_url !== app.download_url ? app.drive_url : null;
   const siteUrl = app.website_link || app.website || null;
   // Deep link into the companion Android client (application id com.app.store).
@@ -339,6 +342,12 @@ function appDetailPage(d) {
     </div>
   </div>
 </section>
+
+<!-- Filled in by initDeviceNotice() once the client knows what device it is on.
+     Rendered empty (and hidden) server-side so the cached HTML is identical for
+     every visitor — putting a device-specific message in the cached response
+     would show Android text to iPhone users. -->
+<div id="device-notice" class="device-notice" data-kind="${esc(dl.kind || "other")}" data-platform="${esc(dl.platform || "")}" data-size="${esc(sizeText)}" hidden></div>
 
 <section class="quick-stats" aria-label="App at a glance">
   <div class="quick-stat"><span class="qs-icon" style="--m:#3b82f6"><i class="fa-solid fa-download"></i></span><div><strong>${formatCount(app.downloads)}</strong><small>Downloads</small></div></div>
@@ -485,6 +494,9 @@ function appDetailPage(d) {
         <dt>App ID</dt><dd><code class="code-inline">${esc(app.slug)}</code></dd>
         ${app.support_email ? `<dt>Support</dt><dd><a href="mailto:${esc(app.support_email)}">${esc(app.support_email)}</a></dd>` : ""}
         ${siteUrl ? `<dt>Website</dt><dd><a href="${esc(siteUrl)}" target="_blank" rel="noopener noreferrer">Visit site</a></dd>` : ""}
+        <dt>Size</dt><dd>${esc(sizeText)}${sizeInfo.source === "probe" || sizeInfo.source === "cache" ? ' <small class="muted" title="Measured from the actual download">auto-detected</small>' : ""}</dd>
+        ${dl.label && dl.kind !== "other" ? `<dt>File type</dt><dd>${esc(dl.label)}</dd>` : ""}
+        ${dl.platform ? `<dt>Platform</dt><dd>${esc(dl.platform)}</dd>` : ""}
         ${app.download_host ? `<dt>Hosted on</dt><dd>${esc(app.download_host)}</dd>` : ""}
         ${app.min_version ? `<dt>Requires</dt><dd>v${esc(app.min_version)} or newer</dd>` : ""}
         ${app.version_code ? `<dt>Build</dt><dd><code class="code-inline">${esc(String(app.version_code))}</code></dd>` : ""}
