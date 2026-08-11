@@ -32,6 +32,7 @@ single lightweight edge application. Every page is real HTML on first paint — 
 - `/top-charts`, `/categories`, `/category/:slug`, `/developers`, `/developer/:slug`
 - `/app/:slug` detail: gallery, description, reviews, version history, **update-available banner**,
   changelog, links & downloads card, Google Drive mirror, privacy policy, **“Open in app” deep link**
+- **Automatic app size + device awareness** on `/app/:slug` (see §2.1)
 - `/search`, `/legal/privacy`, `/legal/terms`, `/about`
 - **Store ⇄ Developer mode switch** in the header on every page
 - Dark/light theme with persistence, toasts, skeletons, share sheet
@@ -100,6 +101,45 @@ GitHub is asked only for `user:email`, never `repo`.
   - images → `drive.google.com/thumbnail?id=…&sz=w1600`
   - downloads → `drive.google.com/uc?export=download&id=…`
 - Dropbox, GitHub and OneDrive links are normalised too; host labels shown on every link tile
+
+### 2.1 Automatic app size & device awareness
+
+`src/lib/appsize.js` decides an app's download size without anyone having to type it in
+correctly, because the stored data cannot be trusted: `app_versions.file_size` is `NULL`
+for 9 of 10 rows, and the one populated row records `54` for a file that is actually
+58,879,844 bytes.
+
+Resolution order, cheapest source first:
+
+1. **Recorded** — a `file_size` on any version. `normalizeStoredSize()` disambiguates the
+   unit: the submit form asks for whole MB, but some rows hold raw bytes, so a value above
+   `100000` can only be bytes.
+2. **KV cache** — keyed on the *download URL*, not the app id, so re-uploading a binary
+   naturally misses the cache. 7-day TTL. (No KV binding is configured today, so this step
+   is skipped and every miss re-probes; that is gated behind `s-maxage=60`.)
+3. **Live HEAD probe** — reads `Content-Length` without transferring the body. 4-second
+   abort so a slow or hostile host can never hold up a render, and an HTML content-type is
+   rejected because that means we followed a share/interstitial page rather than the binary.
+
+A probed size is labelled **auto-detected** in the Information card. `classifyDownload()`
+maps the file extension (`apk`/`aab`/`ipa`/`exe`/`dmg`/`deb`/`rpm`/`AppImage`/`zip`) to a
+target platform, shown as **File type** and **Platform** rows.
+
+**The device notice is rendered empty and hidden, then filled by JavaScript.** The page is
+edge-cached (`s-maxage=60`), so a server-rendered "Compatible with your Android device"
+would be served to iPhone visitors. `detectPlatform()` also handles iPadOS, which reports
+itself as a Mac and is only distinguishable via `navigator.maxTouchPoints`.
+
+The notice **informs, never blocks** — a visitor on a laptop is very often there to send
+the link to their phone, so a mismatch points them at the Share button instead of refusing.
+
+**Share modal** offers copy-link, copy-slug, WhatsApp, Telegram, X, email, native share and
+a QR code. The QR encoder is **self-hosted** (`qrcode-generator@1.4.4`) rather than an
+`<img>` pointed at a QR web service, which would hand every shared app URL to a third party.
+A hand-rolled encoder was written first and **rejected**: it produced symbols that looked
+entirely plausible and decoded as nothing. Both the library and the `drawQr()` wrapper are
+verified by round-tripping rendered pixels through `pyzbar` (4/4 at the production 200px
+canvas size).
 
 ---
 
@@ -474,4 +514,4 @@ duplicate-content problem in Search Console.
 
 ---
 
-**Last updated**: 2026-08-07
+**Last updated**: 2026-08-11
