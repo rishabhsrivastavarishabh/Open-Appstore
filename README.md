@@ -151,11 +151,112 @@ All JSON, all under `/api`. Send `Authorization: Bearer <access_token>` where ma
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/apps` | `?search= &category= &sort=popular\|newest\|rating\|name &price=free\|paid &limit= &offset=` → `{ apps, total, count, has_more }` |
-| GET | `/api/apps/:idOrSlug` | app + developer + reviews + versions |
-| GET | `/api/apps/:id/versions` | release history |
+| GET | `/api/apps/:idOrSlug` | app + developer + reviews + versions + `reviews_pagination` + `rating_breakdown`. `?fields=basic` returns the header block only |
+| GET | `/api/apps/:id/versions` | release history; `?limit= &offset=` → `{ versions, current_version, pagination }` |
 | POST | `/api/apps/:id/download` | records the download, returns the resolved URL |
-| GET | `/api/apps/:id/reviews`, POST 🔒 | list / create a review |
+| GET | `/api/apps/:id/reviews`, POST 🔒 | list / create a review. `?limit= &offset= &sort=newest\|oldest\|highest\|lowest\|helpful &rating=1..5` → `{ reviews, pagination, total, has_more, rating_breakdown, applied }` |
+| GET | `/api/apps/:id/related` | curated relations first, then same-category, then same-developer; each item carries `relation_source` |
+| POST | `/api/apps/:id/share` | `{ share_url, qr_code, links{whatsapp,telegram,twitter,facebook,linkedin,reddit,email,copy} }`. The QR is a server-rendered SVG data URI so non-browser clients get one too |
 | GET | `/api/categories`, `/api/developers`, `/api/apps/stats`, `/api/health` | |
+
+Every path above accepts **either** the app's uuid or its slug.
+
+### Error envelope
+
+Every failing endpoint under `/api` returns the same three fields, from the one
+definition in `src/lib/apierror.js`:
+
+```json
+{ "success": false, "error": "App not found.", "message": "App not found.", "code": "not_found" }
+```
+
+`error` and `message` both carry the sentence to show a person; `code` is the
+stable token to branch on (`bad_request`, `unauthorized`, `forbidden`,
+`not_found`, `conflict`, `unprocessable`, `rate_limited`, `server_error`, …).
+The sentence is duplicated deliberately — the existing frontend and the
+published docs both read `error` as display text, so turning it into a token
+would start showing users strings like `not_found`.
+
+`/api/v1/*` keeps its own documented nested shape (`error: { code, message }`)
+because it is a versioned contract with existing clients.
+
+### Legal documents
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/legal/privacy`, `/api/legal/terms`, `/api/legal/cookies` | current revision as markdown, cached at the edge for an hour |
+| GET | `/api/legal/versions` | all three current version numbers in one round trip, for a consent banner |
+| POST | `/api/user/policy-acceptance` 🔒 | records consent; a version number that does not exist is **refused**, not coerced to "latest" |
+| GET | `/api/user/policy-acceptance` 🔒 | the caller's most recent acceptance |
+| POST | `/api/developer/policy-acceptance` 🔒 | same, for the developer agreement |
+
+Documents live in the database (`privacy_policy_versions`, `terms_of_service_versions`,
+`cookie_policy_versions`), so an operator can publish a revision without a
+redeploy. Versions are append-only: consent evidence must keep pointing at the
+exact text that was accepted (GDPR Art. 7(1)).
+
+### Passkeys (WebAuthn) 🔒
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/api/developer/webauthn/register/options` | requires a session — a flow that let an anonymous caller mint a passkey "for" an email address would be an account-takeover primitive |
+| POST | `/api/developer/webauthn/register/verify` | |
+| POST | `/api/developer/webauthn/authenticate/options` | no session needed; an unknown address still gets a valid challenge and an empty `allowCredentials`, so it does not reveal who has passkeys |
+| POST | `/api/developer/webauthn/authenticate/verify` | |
+| GET / PUT / DELETE | `/api/developer/webauthn/passkeys[/:id]` | list, rename, revoke |
+
+Built directly on **Web Crypto** (`src/lib/webauthn.js`): `@simplewebauthn/server`
+needs Node crypto and would not run on Workers. That means a hand-written CBOR
+decoder, COSE→JWK conversion, and DER→raw `r‖s` conversion, which is mandatory
+because authenticators emit DER signatures and Web Crypto's ECDSA verify only
+accepts the raw form. ES256 (-7) and RS256 (-257) are supported.
+
+Two decisions worth knowing:
+
+- **Challenges are database rows, not memory.** Workers isolates are
+  per-request/per-colo, so the isolate that issues a challenge is usually not
+  the one that verifies it. They are single-use and marked used *before*
+  verification, so a replay cannot succeed even if verification throws.
+- **Signature-counter clone detection is deliberately lenient.** Apple
+  authenticators always report `0`, so only a regression between two *non-zero*
+  values is treated as cloning. Being stricter would lock out every iPhone user.
+
+Attestation *statements* are not verified (we accept `none`/self): the point is
+that the key is bound to this RP and origin, not which manufacturer made it.
+
+### Developer help — Sarath 🔒
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/api/developer/help/chat` | `{ message, conversation_id? }` → `{ response, reply, conversation_id, message_id, topic, suggestions, links }` |
+| GET | `/api/developer/help/conversations` | the caller's history |
+| GET | `/api/developer/help/conversations/:id` | one conversation with its messages |
+| POST | `/api/developer/help/feedback` | `{ message_id, helpful, feedback? }` |
+
+`response` and `reply` are the same string — the spec document uses both names.
+Rate limited by the same two gates as the other AI routes (3/minute burst,
+20/hour), and the burst gate is checked *before* the hourly charge so being told
+to slow down does not also cost an hourly call. The user's message is saved
+*before* the model is called, so a transient upstream failure does not lose what
+they typed. `conversation_id` is checked against the caller's own developer id.
+
+### App metadata 🔒
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET / POST | `/api/developer/apps/:id/screenshots` | max 8; Drive links normalised |
+| DELETE | `/api/developer/apps/:id/screenshots/:shotId` | |
+| PUT | `/api/developer/apps/:id/screenshots/order` | rejects the whole request if any id is not yours |
+| GET / POST | `/api/developer/apps/:id/files` | the server **HEAD-probes** the URL and records the real size and content type; an unreachable link is a 422 |
+| POST | `/api/developer/apps/:id/publish` / `unpublish` | 422 if there is no working download link |
+| GET | `/api/developer/apps/:id/analytics` | returns `has_data: false` / `source: "none"` when there is nothing to show |
+
+Asking for someone else's app returns **404, not 403** — a 403 would confirm the
+app exists, which the caller is not entitled to know.
+
+> **Not implemented: direct file upload.** The specification asks for
+> `multipart/form-data` uploads of icons, screenshots and APK/AAB files up to
+> 500 MB. Cloudflare Workers cannot accept that — there is no request-body
+> spooling and no writable filesystem. These endpoints therefore register media
+> *by URL* and verify it server-side rather than trusting the client. Real
+> uploads need an R2 bucket plus presigned PUTs; that is an infrastructure
+> decision, not something to fake here.
 
 ### Auth
 | Method | Path | Notes |
@@ -280,6 +381,40 @@ ground from anywhere in the app.
 | `user_devices` | device hash, name, IP, last seen |
 | `user_login_history` | success/failure + reason for every attempt |
 | `notifications`, `developer_stats` | reserved for future use |
+| `app_screenshots` | per-app screenshots with `order_position` |
+| `app_files` | registered binaries: `file_url`, `file_size` (**bytes**, HEAD-verified), `file_type`, `is_current` |
+| `app_analytics_daily` | per-day downloads/crashes/ratings; the analytics endpoint falls back to tallying `app_downloads` when this is empty |
+| `app_related_apps` | curated relations (`relation_type`, `score`) |
+| `webauthn_credentials` | passkeys: `credential_id_b64`, `public_key_jwk`, `sign_count`, device labels |
+| `webauthn_challenges` | single-use registration/authentication challenges with `expires_at` |
+| `privacy_policy_versions`, `terms_of_service_versions`, `cookie_policy_versions` | append-only legal text (`version_number`, `content`, `effective_date`) |
+| `user_policy_acceptance`, `developer_policy_acceptance` | consent evidence; UUID FKs to the three tables above, plus `ip_address` and `user_agent` |
+| `developer_help_conversations`, `developer_help_messages` | Sarath help history and per-message feedback |
+| `cloud_connections`, `cloud_files` | reserved for the OAuth media providers (not implemented — see §9) |
+
+**Two schema traps worth recording**, both of which cost time this cycle:
+
+1. **The table names in the uploaded API specification do not match the
+   database.** The spec refers to `developer_passkeys`, `legal_documents` and
+   `policy_acceptances`; the real tables are `webauthn_credentials`,
+   `privacy_policy_versions` / `terms_of_service_versions` /
+   `cookie_policy_versions`, and `user_policy_acceptance` /
+   `developer_policy_acceptance`. Building to the documented names would have
+   produced endpoints that silently returned nothing. The live schema was
+   enumerated from the PostgREST OpenAPI root (`GET /rest/v1/` with the service
+   key) and that is the authority.
+2. **The acceptance tables key on UUIDs, not version numbers.** They hold
+   `privacy_policy_version_id` etc., while the spec's payload sends an integer
+   `version`. The API resolves the integer to the row id, and **refuses an
+   unknown number** rather than falling back to "latest" — recording consent
+   against a different document than the one the user was shown would make the
+   audit trail worse than having none.
+
+Also note **`app_versions.file_size` is in MB while `app_files.file_size` is in
+bytes**, and some legacy `apps.file_size` values are unreliable (one row records
+`54` for a file that is really 58,879,844 bytes). `src/lib/appsize.js`
+normalises this by treating values over 100,000 as bytes and anything smaller as
+MB, then prefers a live HEAD probe.
 
 **Security notes**
 - The TOTP secret and backup-code hashes are only ever read server-side with the service-role key.
@@ -350,6 +485,27 @@ STORE_ID=…
 ```
 
 Seed demo data (safe to re-run): `node scripts/seed.mjs`.
+
+### Tests
+
+```bash
+node tests/api-new.mjs                              # 77 checks, no auth needed
+BASE=https://openappstore.pages.dev node tests/api-new.mjs   # same suite against production
+node tests/api-new-auth.mjs                         # 45 checks; needs the service-role key
+```
+
+`tests/api-new.mjs` covers the app-details, reviews, versions, related, share
+and legal routes, and asserts that every gated route refuses anonymous callers.
+`tests/api-new-auth.mjs` creates throwaway accounts to prove the gated routes
+actually work, and — more importantly — that a second developer gets a 404 on
+the first developer's app, analytics and passkeys. It deletes everything it
+creates.
+
+> **If `npm run build` appears to hang, it is out of memory, not stuck.**
+> The sandbox has ~1 GB. A running `wrangler pages dev` holds several hundred
+> megabytes, and PM2 *respawns* it, so `pkill` alone does not help. Run
+> `pm2 delete all`, then build — it completes in well under a second. Using
+> `NODE_OPTIONS="--max-old-space-size=400"` keeps headroom.
 
 ---
 
@@ -480,6 +636,29 @@ Cloudflare Worker, so DNS for the subdomain has to point at Cloudflare Pages.
   `422 {"error_code":"otp_disabled"}`. Any "send a 6-digit code" flow therefore has no delivery
   channel. Adding one requires a mail provider + verified sending domain.
 
+### Three specification items that are blocked on infrastructure, not code
+
+These are from the extended API specification. They are listed here rather than
+half-built, because a stub that returns a plausible-looking response is worse
+than an absent endpoint — it gets integrated against and fails in production.
+
+1. **`multipart/form-data` uploads (icons, screenshots, APK/AAB up to 500 MB).**
+   Not possible on Cloudflare Workers: no request-body spooling, no writable
+   filesystem, and the whole Worker has a 10 MB compressed size budget. What
+   exists instead: the media endpoints register a **URL**, and the server
+   HEAD-probes it to record the real size and content type rather than trusting
+   the client. *Fix:* an R2 bucket plus presigned PUTs, so the browser uploads
+   straight to R2 and the Worker only ever sees the resulting key.
+2. **OAuth media providers (Google Drive / Dropbox / OneDrive).** The
+   `cloud_connections` and `cloud_files` tables exist and are empty. No endpoint
+   is exposed because each provider needs its own registered OAuth client id and
+   secret with the right redirect URIs — credentials nobody has supplied. Writing
+   the flow without them would produce code that cannot be tested at all.
+3. **Forgot-password *email*.** Same blocker as the OTP note above: the
+   `password_reset_tokens` table exists, but there is no way to deliver the
+   token. `POST /api/auth/reset-password` currently hands the request to Supabase,
+   which is the only channel that works on this project.
+
 ### Developer auth URLs
 
 There is **one** account system, not a separate developer credential store: "developer" is a role
@@ -514,4 +693,4 @@ duplicate-content problem in Search Console.
 
 ---
 
-**Last updated**: 2026-08-11
+**Last updated**: 2026-08-12

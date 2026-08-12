@@ -106,11 +106,20 @@ wa.post("/developer/webauthn/register/options", async (c) => {
     "select=credential_id_b64&developer_id=eq." + ctx.developer.id + "&limit=50"
   );
   const rpId = rpIdFor(c.req.url);
+  const userHandle = btoa(ctx.developer.id).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const userName = ctx.developer.email || ctx.user.email || "developer";
+  const userDisplayName = ctx.developer.developer_name || ctx.developer.email || "Developer";
   return c.json({
     challenge,
-    userId: btoa(ctx.developer.id).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
-    userName: ctx.developer.email || ctx.user.email || "developer",
-    userDisplayName: ctx.developer.developer_name || ctx.developer.email || "Developer",
+    // Nested exactly as PublicKeyCredentialCreationOptions.user expects, so the
+    // browser can pass this straight to navigator.credentials.create() after
+    // only base64url-decoding the two binary fields. The flat userId/userName
+    // keys are kept as aliases because the published spec document lists them
+    // and dropping them would break a client written against it.
+    user: { id: userHandle, name: userName, displayName: userDisplayName },
+    userId: userHandle,
+    userName,
+    userDisplayName,
     rp: { name: "Open Appstore", id: rpId },
     pubKeyCredParams: [
       { type: "public-key", alg: -7 },

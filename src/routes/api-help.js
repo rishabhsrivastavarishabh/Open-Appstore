@@ -258,9 +258,15 @@ help.post("/developer/help/chat", async (c) => {
   // the response.
   applyHeaders(c, g.rl);
   return c.json({
+    success: true,
     response: out.text,
+    // `reply` is an alias for `response`: the uploaded specification uses both
+    // names in different places, so serving both means a client written against
+    // either half of the document works.
+    reply: out.text,
     conversation_id: conversationId,
     message_id: (saved || [])[0]?.id || null,
+    topic,
     suggestions: suggestionsFor(topic),
     links: linksFor(topic),
     model: MODEL
