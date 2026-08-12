@@ -18,6 +18,7 @@
  */
 import { Hono } from "hono";
 import { sbSelect, sbAdminSelect, sbAdminWrite, sbAuth, bearer } from "../lib/supabase.js";
+import { fail } from "../lib/apierror.js";
 
 const legal = new Hono();
 
@@ -30,9 +31,6 @@ const DOC_TABLES = {
 
 const DOC_SELECT = "id,version_number,content,effective_date,created_at,updated_at";
 
-function fail(c, status, message, code) {
-  return c.json({ error: code || "server_error", message }, status);
-}
 
 /**
  * Read the current revision: the highest `version_number` whose

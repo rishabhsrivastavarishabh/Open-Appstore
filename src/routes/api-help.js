@@ -12,6 +12,7 @@
  */
 import { Hono } from "hono";
 import { sbSelect, sbAdminSelect, sbAdminWrite, sbAuth, bearer } from "../lib/supabase.js";
+import { fail } from "../lib/apierror.js";
 import { consume, consumeBurst, applyHeaders } from "../lib/ratelimit.js";
 
 const help = new Hono();
@@ -19,9 +20,6 @@ const help = new Hono();
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const MODEL = "openai/gpt-4o-mini";
 
-function fail(c, status, message, code) {
-  return c.json({ error: code || "server_error", message }, status);
-}
 
 /**
  * Grounding. The assistant is told what it does and does not know, because a
@@ -60,17 +58,39 @@ async function gate(c) {
 
   // Burst gate first and BEFORE the hourly charge: being told to slow down for a
   // few seconds should not also cost one of the hourly allowance.
-  const burst = consumeBurst(user.id, "ai");
-  if (!burst.ok) {
-    const res = fail(c, 429, "You are sending messages too quickly. Wait a moment and try again.", "rate_limit_exceeded");
-    res.headers.set("Retry-After", String(burst.retryAfter || 20));
-    return { err: res };
+  //
+  // Note the field name: consumeBurst/consume report `allowed`, not `ok`.
+  // Reading the wrong key made this gate reject every request, because
+  // `!undefined` is always true.
+  //
+  // Retry-After is set with c.header() rather than on the returned Response,
+  // because headers must be staged on the context before the body is created.
+  const burst = consumeBurst(`help:${user.id}`, "ai");
+  if (!burst.allowed) {
+    c.header("Retry-After", String(burst.retryAfter));
+    return {
+      err: fail(
+        c,
+        429,
+        `You are sending messages too quickly. Wait ${burst.retryAfter}s — the limit is ${burst.limit} per minute.`,
+        "rate_limited",
+        { retry_after: burst.retryAfter }
+      )
+    };
   }
-  const info = consume(user.id, "ai");
-  if (!info.ok) {
-    const res = fail(c, 429, "You have reached the hourly limit for AI help. Try again later.", "rate_limit_exceeded");
-    res.headers.set("Retry-After", String(info.retryAfter || 600));
-    return { err: res };
+  const info = consume(`help:${user.id}`, "ai");
+  applyHeaders(c, info);
+  if (!info.allowed) {
+    c.header("Retry-After", String(info.retryAfter));
+    return {
+      err: fail(
+        c,
+        429,
+        `You have used all ${info.limit} AI help requests for this hour.`,
+        "rate_limited",
+        { retry_after: info.retryAfter }
+      )
+    };
   }
   return { user, developer, token, rl: info };
 }

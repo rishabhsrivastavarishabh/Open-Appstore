@@ -14,6 +14,7 @@ import { sbSelect } from "../lib/supabase.js";
 import { consume, consumeBurst, applyHeaders } from "../lib/ratelimit.js";
 import { bearer } from "../lib/supabase.js";
 import { sbAuth } from "../lib/supabase.js";
+import { fail as apiFail } from "../lib/apierror.js";
 
 const ai = new Hono();
 
@@ -67,8 +68,13 @@ function cacheSet(key, value) {
   cache.set(key, { value, expires: Date.now() + CACHE_TTL_MS });
 }
 
+/**
+ * Delegates to the shared envelope so these endpoints carry `message` like the
+ * rest of /api. The default code stays "ai_error" rather than the status-derived
+ * one, because callers already branch on it to decide whether to offer a retry.
+ */
 function fail(c, status, message, code) {
-  return c.json({ success: false, error: message, code: code || "ai_error" }, status);
+  return apiFail(c, status, message, code || "ai_error");
 }
 
 /**

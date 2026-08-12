@@ -20,6 +20,7 @@
  */
 import { Hono } from "hono";
 import { sbSelect, sbAdminSelect, sbAdminWrite, sbAuth, bearer, hasServiceRole, serviceKey } from "../lib/supabase.js";
+import { fail } from "../lib/apierror.js";
 import {
   randomChallenge,
   verifyRegistration,
@@ -33,9 +34,6 @@ const wa = new Hono();
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000; // 5 minutes: long enough for biometrics
 
-function fail(c, status, message, code) {
-  return c.json({ error: code || "server_error", message }, status);
-}
 
 /** Origins we will accept an assertion from: exactly the host serving this request. */
 function originsFor(c) {

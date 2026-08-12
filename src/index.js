@@ -6,6 +6,10 @@ import apiAuth from "./routes/api-auth.js";
 import apiDeveloper from "./routes/api-developer.js";
 import apiV1 from "./routes/api-v1.js";
 import apiAi from "./routes/api-ai.js";
+import apiLegal from "./routes/api-legal.js";
+import apiWebauthn from "./routes/api-webauthn.js";
+import apiHelp from "./routes/api-help.js";
+import apiAppmeta from "./routes/api-appmeta.js";
 import { sbSelect } from "./lib/supabase.js";
 import { normalizeImageUrl } from "./lib/media.js";
 import { resolveAppSize, classifyDownload } from "./lib/appsize.js";
@@ -92,6 +96,15 @@ app.route("/api", apiAi);
 app.route("/api", apiApps);
 app.route("/api", apiAuth);
 app.route("/api", apiDeveloper);
+// Feature routers added for the extended API surface. All of these live under
+// /api and register only their own concrete paths (no catch-alls), so relative
+// order between them does not matter. They are mounted after apiDeveloper
+// simply so the pre-existing developer routes keep first claim on any path
+// they already owned.
+app.route("/api", apiAppmeta);
+app.route("/api", apiWebauthn);
+app.route("/api", apiHelp);
+app.route("/api", apiLegal);
 app.get(
   "/api/health",
   (c) => c.json({ success: true, service: "open-appstore", time: (/* @__PURE__ */ new Date()).toISOString() })

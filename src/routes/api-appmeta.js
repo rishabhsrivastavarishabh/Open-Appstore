@@ -20,14 +20,12 @@
  */
 import { Hono } from "hono";
 import { sbSelect, sbAdminSelect, sbAdminWrite, sbAuth, bearer } from "../lib/supabase.js";
+import { fail } from "../lib/apierror.js";
 import { normalizeImageUrl, normalizeDownloadUrl } from "../lib/media.js";
 import { probeDownloadSize, formatBytes, classifyDownload } from "../lib/appsize.js";
 
 const meta = new Hono();
 
-function fail(c, status, message, code) {
-  return c.json({ error: code || "server_error", message }, status);
-}
 
 /** Authenticate, then confirm the caller owns the app named in the path. */
 async function requireOwnedApp(c, idParam = "id") {
